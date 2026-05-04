@@ -145,16 +145,22 @@ function sanitizeResult(parsed) {
 
 // 1. Remove fake numeric performance metrics from text
 function removeFakeMetrics(text) {
+  if (!text) return text;
   return text
-    // Strip percentage figures attached to marketing metrics
-    .replace(/\b\d+(\.\d+)?%\s*(increase|improvement|boost|growth|higher|lower|better|worse|more|less)?\b/gi, '')
-    // Strip metric labels with numbers: "CTR of 12%", "12.5% CTR"
-    .replace(/\b\d+(\.\d+)?%\s*(CTR|CVR|conversion rate?|keyword density|click.through|open rate|bounce rate)\b/gi, '')
-    .replace(/\b(CTR|CVR|conversion rate?|keyword density)\s*(of\s*)?\d+(\.\d+)?%/gi, '')
-    // Replace remaining bare metric labels with qualitative equivalents
+    // ── Strip numeric percentages attached to marketing metric labels ──────
+    .replace(/\b\d+(\.\d+)?%\s*(increase|improvement|boost|growth|higher|lower|better|worse|more|less)\b/gi, '')
+    .replace(/\b\d+(\.\d+)?%\s*(CTR|CVR|conversion rate?|keyword density|click.through|open rate|bounce rate|engagement rate)\b/gi, '')
+    .replace(/\b(CTR|CVR|conversion rate?|keyword density|click.through rate?|open rate|bounce rate)\s*(of\s*)?\d+(\.\d+)?%/gi, '')
+    // ── Strip bare percentages that follow "of" or "at" (broken placeholders) ──
+    // e.g. "density of %" → removed, "CTR of and" → removed
+    .replace(/\b(density|rate|score|index|level)\s+of\s+\d*\.?\d*%?/gi, '')
+    .replace(/\b(density|rate|score|index|level)\s+of\s+(and|or|the|a|an)\b/gi, '')
+    // ── Strip any remaining bare percentage numbers ──────────────────────
+    .replace(/\b\d+(\.\d+)?%/g, '')
+    // ── Replace bare metric abbreviations with qualitative equivalents ────
     .replace(/\bCTR\b/g, 'click-through rate')
     .replace(/\bCVR\b/g, 'conversion rate')
-    // Collapse extra whitespace left by removals
+    // ── Collapse whitespace ───────────────────────────────────────────────
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -234,20 +240,21 @@ function validateKeywords(keywords, query) {
 function cleanModelResult(result, query) {
   const domain = detectCleaningDomain(query);
 
-  const cleanedInsights = cleanByDomain(removeFakeMetrics(result.insights), domain);
+  // Run full sanitize pipeline: removeFakeMetrics → cleanByDomain → repairText → sentence filter
+  const cleanedInsights = sanitizeOutput(cleanByDomain(removeFakeMetrics(result.insights), domain));
 
   const cleanedSuggestions = result.suggestions
-    .map((s) => cleanByDomain(removeFakeMetrics(s), domain))
+    .map((s) => sanitizeOutput(cleanByDomain(removeFakeMetrics(s), domain)))
     .filter(isStrongSuggestion);
 
-  // If all suggestions were filtered out, keep the best original ones
+  // If all suggestions were filtered out, sanitize and keep the best original ones
   const finalSuggestions = cleanedSuggestions.length >= 2
     ? cleanedSuggestions
-    : result.suggestions.slice(0, 3);
+    : result.suggestions.map((s) => sanitizeOutput(s)).slice(0, 3);
 
   return {
     ...result,
-    insights:    cleanedInsights    || result.insights,
+    insights:    cleanedInsights || result.insights,
     suggestions: finalSuggestions,
   };
 }
@@ -336,23 +343,60 @@ function repairText(text) {
   if (!text) return text;
 
   return text
-    // Fix "click-through rate increased by " → "Higher click-through driven by"
+    // ── Fix broken metric-removal artifacts ──────────────────────────────
     .replace(/click.through rate\s+increased\s+by\s*/gi, 'Higher click-through driven by ')
-    // Fix "conversion rate increased by " → "Stronger conversion driven by"
     .replace(/conversion rate?\s+increased\s+by\s*/gi, 'Stronger conversion driven by ')
-    // Fix "driven by driven by" (duplicate from metric removal)
+    // ── Fix "X of and/or/." patterns (empty numeric placeholder) ─────────
+    .replace(/\b\w+\s+of\s+(and|or|the|a|an)\b/gi, '')
+    .replace(/\b\w+\s+of\s+\./gi, '')
+    // ── Fix "of and ." and similar broken fragments ───────────────────────
+    .replace(/\bof\s+and\b/gi, '')
+    .replace(/\bof\s+\./gi, '.')
+    // ── Fix duplicate connectors ──────────────────────────────────────────
     .replace(/\bdriven by\s+driven by\b/gi, 'driven by')
-    // Fix "due to due to"
     .replace(/\bdue to\s+due to\b/gi, 'due to')
-    // Remove trailing connectors at end of sentence
+    .replace(/\bbased on\s+based on\b/gi, 'based on')
+    // ── Remove trailing connectors at sentence end ────────────────────────
     .replace(/\s+(by|due to|through|via|with|and|or|for|of|in|on|at|to)\s*[.!?]?$/gi, '.')
-    // Remove incomplete fragments: sentences that are just a connector phrase
+    // ── Remove connector-only fragments between sentences ─────────────────
     .replace(/\.\s*(by|due to|through|via|with|and|or)\s*\./gi, '.')
-    // Collapse multiple spaces
+    // ── Remove sentences that are just punctuation or symbols ─────────────
+    .replace(/\s*[-–—:;,]\s*\./g, '.')
+    // ── Collapse multiple spaces and dots ─────────────────────────────────
+    .replace(/\.{2,}/g, '.')
     .replace(/\s{2,}/g, ' ')
-    // Ensure sentence ends with punctuation
-    .replace(/([a-z0-9])\s*$/, '$1.')
+    // ── Ensure sentence ends with punctuation ─────────────────────────────
+    .replace(/([a-z0-9'"])\s*$/, '$1.')
     .trim();
+}
+
+// ── Final output sanitizer — applied to all text fields before returning ──────
+function sanitizeOutput(text) {
+  if (!text || typeof text !== 'string') return text;
+
+  let t = removeFakeMetrics(text);
+  t = repairText(t);
+
+  // Remove sentences that became empty or near-empty after cleaning
+  // Split on sentence boundaries, filter, rejoin
+  const sentences = t
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (!s || s.length < 8) return false;
+      // Reject sentences that are only connectors/symbols
+      if (/^[-–—:;,.\s]+$/.test(s)) return false;
+      // Reject sentences with "of and", "of or", "of ." patterns
+      if (/\bof\s+(and|or|\.)/i.test(s)) return false;
+      // Reject sentences that start with a connector word
+      if (/^(and|or|but|of|by|with|for|in|on|at|to)\b/i.test(s)) return false;
+      return true;
+    });
+
+  const result = sentences.join(' ').trim();
+
+  // If sanitization emptied the text, return a safe neutral fallback
+  return result.length >= 10 ? result : 'Analysis based on current market positioning and competitive signals.';
 }
 
 // Normalise and validate keywords using the enhanced domain
@@ -2015,21 +2059,21 @@ export async function analyzeWithMultipleModels(query) {
   const finalStrategy = {
     ...strategyRaw,
     focusKeywords:     finalKeywords,
-    recommendedAction: refinedAction,
-    positioning:       repairText(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
-    priceStrategy:     repairText(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
-    quickWin:          generateQuickWin(primaryIntent),
+    recommendedAction: sanitizeOutput(refinedAction),
+    positioning:       sanitizeOutput(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
+    priceStrategy:     sanitizeOutput(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
+    quickWin:          sanitizeOutput(generateQuickWin(primaryIntent)),
     // Additive fields — frontend ignores unknown fields gracefully
     evidence,
     confidence,
     groundSignals:     groundSignals.topSignals,
   };
 
-  // ── Step 6: Repair model insights ────────────────────────────────────────
+  // ── Step 6: Sanitize all model text fields ───────────────────────────────
   const repairModel = (m) => ({
     ...m,
-    insights:    repairText(m.insights),
-    suggestions: m.suggestions.map(repairText),
+    insights:    sanitizeOutput(m.insights),
+    suggestions: m.suggestions.map(sanitizeOutput),
   });
 
   const result = {
