@@ -8,6 +8,8 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Home from './src/pages/Home.tsx';
 import NotFound from './src/pages/NotFound.tsx';
 import Analytics from './src/pages/Analytics.tsx';
+import Login from './src/pages/Login.tsx';
+import Register from './src/pages/Register.tsx';
 
 const App: React.FC = () => {
   return (
@@ -17,6 +19,8 @@ const App: React.FC = () => {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/analytics" element={<Analytics />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           <ToastContainer

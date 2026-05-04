@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import SearchBar from '../components/SearchBar';
 import ModelCard from '../components/ModelCard';
 import ComparisonCard from '../components/ComparisonCard';
 import StrategyCard from '../components/StrategyCard';
-import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle } from 'lucide-react';
-import { analyzeQuery } from '../services/api.js';
+import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle, LogOut, User } from 'lucide-react';
+import { analyzeQuery, getStoredUser, clearToken } from '../services/api.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -62,13 +62,19 @@ function toModelCardProps(name: string, model: ModelResult) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
+  const navigate = useNavigate();
   const [isLoading, setIsLoading]         = useState(false);
   const [result, setResult]               = useState<ApiData | null>(null);
   const [error, setError]                 = useState<string | null>(null);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  // Keyword pushed from StrategyCard / Apply Strategy — consumed by SearchBar
   const [pendingQuery, setPendingQuery]   = useState('');
+  const [currentUser, setCurrentUser]     = useState(getStoredUser());
+
+  const handleLogout = () => {
+    clearToken();
+    setCurrentUser(null);
+  };
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultsRef     = useRef<HTMLDivElement>(null);
@@ -154,9 +160,30 @@ export default function Home() {
             <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">API Docs</a>
             <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
             <Link to="/analytics" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Analytics</Link>
-            <button className="px-5 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-semibold transition-all">
-              Sign In
-            </button>
+            {currentUser ? (
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <User size={13} />
+                  {currentUser.email}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-semibold transition-all"
+                >
+                  <LogOut size={14} />
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Link to="/login" className="px-4 py-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                  Sign in
+                </Link>
+                <Link to="/register" className="px-5 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-lg text-sm font-semibold transition-all">
+                  Sign up
+                </Link>
+              </div>
+            )}
           </nav>
         </div>
       </header>
