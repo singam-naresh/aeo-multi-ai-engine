@@ -1652,26 +1652,52 @@ function generateHumanStrategy(primaryIntent, topProduct) {
 }
 
 // 6. Generate a sharp, intent-driven positioning statement
-function generatePositioning(primaryIntent, priceType) {
+function generatePositioning(primaryIntent, priceType, domain) {
   const isBudget = priceType === 'budget' || primaryIntent === 'budget' || primaryIntent === 'student value';
 
+  // Platform-domain intents — never use "device" or "product"
+  if (domain === 'platform') {
+    const platformMap = {
+      'ai productivity':   'AI productivity platform focused on automation, speed, and ease of use',
+      'general performance': 'Platform focused on strong user experience and reliable performance',
+      'budget':            'Accessible platform offering core features without a premium price',
+      'professional use':  'Professional platform built for reliability, security, and team productivity',
+      'student value':     'Platform designed for students — easy to use, affordable, and fast to get started',
+    };
+    return platformMap[primaryIntent] || 'Platform focused on fast discovery, easy application flow, and strong user trust';
+  }
+
+  // Product-domain intents — use hardware/product language
   const map = {
-    'gaming performance':          isBudget ? 'Budget gaming device built for consistent FPS performance'         : 'High-performance gaming device built for competitive play',
-    'camera quality':              isBudget ? 'Camera-focused device for users who prioritize image quality on a budget' : 'Camera-first device for photography enthusiasts',
+    'gaming performance':          isBudget ? 'Budget gaming build for consistent FPS performance'         : 'High-performance gaming build for competitive play',
+    'camera quality':              isBudget ? 'Camera-focused option for users who prioritize image quality on a budget' : 'Camera-first option for photography enthusiasts',
     'performance for development': isBudget ? 'Budget developer laptop with strong processing power and portability' : 'Performance-first laptop tailored for developers and engineers',
-    'ai productivity':             'AI productivity platform focused on automation, speed, and ease of use',
-    'battery life':                'Long-lasting device built for all-day productivity without compromise',
-    'student value':               'Affordable, capable device designed for students who need performance and portability',
-    'budget':                      'Value-first device offering competitive specs without the premium price tag',
-    'professional use':            'Professional-grade device built for reliability, security, and all-day performance',
-    'general performance':         'Well-rounded device offering strong performance and reliable everyday use',
+    'ai productivity':             'AI productivity tool focused on automation, speed, and ease of use',
+    'battery life':                'Long-lasting option built for all-day productivity without compromise',
+    'student value':               'Affordable, capable option designed for students who need performance and portability',
+    'budget':                      'Value-first option offering competitive specs without the premium price tag',
+    'professional use':            'Professional-grade option built for reliability, security, and all-day performance',
+    'general performance':         'Well-rounded option offering strong performance and reliable everyday use',
   };
 
   return map[primaryIntent] || map['general performance'];
 }
 
 // 7. Generate a sharp, intent-specific quick win
-function generateQuickWin(primaryIntent) {
+function generateQuickWin(primaryIntent, domain) {
+  // Platform-domain quick wins — no product listing / image language
+  if (domain === 'platform') {
+    const platformMap = {
+      'ai productivity':             'Add a 60-second product demo video to the landing page',
+      'general performance':         'Add a feature comparison table vs top 3 competitors on the homepage',
+      'budget':                      'Make the free tier CTA the first visible element above the fold',
+      'professional use':            'Highlight security certifications and enterprise support on the pricing page',
+      'student value':               'Add a student plan with clear pricing and one-click signup',
+    };
+    return platformMap[primaryIntent] || 'Add a prominent search filter for the most common user intent on the homepage';
+  }
+
+  // Product-domain quick wins
   const map = {
     'gaming performance':          'Show real gameplay FPS benchmarks in product images',
     'camera quality':              'Add side-by-side camera comparisons vs top competitor in listing',
@@ -1685,6 +1711,144 @@ function generateQuickWin(primaryIntent) {
   };
 
   return map[primaryIntent] || map['general performance'];
+}
+
+// ─── Domain Enforcement Layer ─────────────────────────────────────────────────
+
+// Words that must never appear in platform-domain outputs
+const PLATFORM_BLOCKED = [
+  [/\bdevice\b/gi,          'platform'],
+  [/\bproduct listing\b/gi, 'platform listing'],
+  [/\blisting\b/gi,         'platform page'],
+  [/\bSKU\b/gi,             'entry'],
+  [/\bprice point\b/gi,     'pricing tier'],
+  [/\bbullet points?\b/gi,  'key highlights'],
+  [/\bproduct images?\b/gi, 'platform screenshots'],
+  [/\bimage optimization\b/gi, 'UX improvement'],
+];
+
+// Words that must never appear in product-domain outputs
+const PRODUCT_BLOCKED = [
+  [/\buser onboarding\b/gi, 'getting started experience'],
+  [/\bcommunity engagement\b/gi, 'customer engagement'],
+  [/\bplatform\b/gi,        'product'],
+];
+
+// Generic strategy verbs that must be replaced with specific structure
+const GENERIC_STRATEGY_RE = /\b(outperform|compete better|improve quality|be better than|do better than)\b/gi;
+
+// Fallback safe responses per domain
+const PLATFORM_FALLBACK = {
+  recommendedAction: 'Compete with leading platforms like Indeed by improving job discovery and fresher-focused filtering.',
+  focusKeywords:     ['jobs for freshers', 'entry level jobs', 'graduate jobs', 'remote jobs', 'job search platform'],
+  positioning:       'Job platform designed for faster job discovery and easy applications.',
+  quickWin:          'Add a dedicated fresher jobs filter on the homepage search bar.',
+};
+
+const PRODUCT_FALLBACK = {
+  recommendedAction: 'Compete with top competitors by highlighting the strongest performance feature and clear pricing advantage.',
+  focusKeywords:     ['best product in this category', 'top rated option', 'budget friendly choice'],
+  positioning:       'Well-positioned product offering strong performance and reliable everyday use.',
+  quickWin:          'Add a feature comparison chart vs the top competitor in the listing.',
+};
+
+/**
+ * Rewrite text to remove cross-domain language leakage.
+ * @param {string} text
+ * @param {'platform'|'product'} domain
+ * @returns {string}
+ */
+function enforceDomainLanguage(text, domain) {
+  if (!text) return text;
+  let t = text;
+  if (domain === 'platform') {
+    for (const [pattern, replacement] of PLATFORM_BLOCKED) {
+      t = t.replace(pattern, replacement);
+    }
+  } else {
+    for (const [pattern, replacement] of PRODUCT_BLOCKED) {
+      t = t.replace(pattern, replacement);
+    }
+  }
+  return t.replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Check whether a strategy string is specific enough.
+ * Returns true if it contains a competitor reference AND a specific feature/action.
+ */
+function isSpecificStrategy(text) {
+  if (!text) return false;
+  // Must not be purely generic
+  if (GENERIC_STRATEGY_RE.test(text)) return false;
+  // Must contain a specific feature or action word
+  const hasFeature = /\b(filters?|search|apply|onboard|match|discover|recommend|speed|fps|camera|battery|ram|ssd|gpu|price|ux|ui|flow|dashboard|api|integration|support|trial|listing|image|spec|benchmark|comparison|application|fresher|hiring|job|salary|review|rating)\b/i.test(text);
+  return hasFeature;
+}
+
+/**
+ * Enforce domain correctness on the entire finalStrategy object.
+ * Rewrites cross-domain language and validates strategy specificity.
+ * Falls back to safe domain-specific defaults if validation fails.
+ *
+ * @param {object} strategy
+ * @param {'platform'|'product'} domain
+ * @param {string} primaryIntent
+ * @returns {object}
+ */
+function enforceFinalStrategy(strategy, domain, primaryIntent) {
+  const fallback = domain === 'platform' ? PLATFORM_FALLBACK : PRODUCT_FALLBACK;
+
+  // ── Rewrite cross-domain language in all text fields ──────────────────
+  let recommendedAction = enforceDomainLanguage(strategy.recommendedAction, domain);
+  let positioning       = enforceDomainLanguage(strategy.positioning,       domain);
+  let priceStrategy     = enforceDomainLanguage(strategy.priceStrategy,     domain);
+  let quickWin          = enforceDomainLanguage(strategy.quickWin,          domain);
+
+  // ── Validate strategy specificity — regenerate once if generic ────────
+  if (!isSpecificStrategy(recommendedAction)) {
+    // Try the fallback for this domain
+    recommendedAction = fallback.recommendedAction;
+  }
+
+  // ── Platform-specific quick win validation ────────────────────────────
+  if (domain === 'platform') {
+    const PLATFORM_QW_BLOCKED = /product listing|image optimization|bullet point|spec badge|hero image|product image|listing image/i;
+    if (PLATFORM_QW_BLOCKED.test(quickWin)) {
+      quickWin = fallback.quickWin;
+    }
+  }
+
+  // ── Keyword domain validation ─────────────────────────────────────────
+  let focusKeywords = strategy.focusKeywords;
+  if (domain === 'platform') {
+    // Remove product-style keywords (e.g. "best laptop", "comfortable device")
+    const PRODUCT_KW_RE = /\b(laptop|phone|shoes|device|gadget|headphone|camera|gpu|ssd|ram|processor)\b/i;
+    const filtered = focusKeywords.filter((kw) => !PRODUCT_KW_RE.test(kw));
+    focusKeywords = filtered.length >= 3 ? filtered : fallback.focusKeywords;
+  } else {
+    // Remove platform-style keywords from product queries
+    const PLATFORM_KW_RE = /\b(job(s)?|career|resume|hiring|platform|website|saas|onboarding)\b/i;
+    const filtered = focusKeywords.filter((kw) => !PLATFORM_KW_RE.test(kw));
+    focusKeywords = filtered.length >= 3 ? filtered : focusKeywords;
+  }
+
+  // ── Final check: if positioning still contains wrong-domain words, use fallback ──
+  const PLATFORM_POSITION_BLOCKED = /\bdevice\b|\bproduct\b/i;
+  if (domain === 'platform' && PLATFORM_POSITION_BLOCKED.test(positioning)) {
+    positioning = fallback.positioning;
+  }
+
+  console.log('DOMAIN ENFORCE:', domain, '| strategy valid:', isSpecificStrategy(recommendedAction));
+
+  return {
+    ...strategy,
+    recommendedAction,
+    positioning,
+    priceStrategy,
+    quickWin,
+    focusKeywords,
+  };
 }
 
 // ─── Adaptive + Data-Augmented Layer ─────────────────────────────────────────
@@ -2120,18 +2284,21 @@ export async function analyzeWithMultipleModels(query) {
 
   console.log('GROUND SIGNALS:', groundSignals.topSignals, '| CONFIDENCE:', confidence);
 
-  const finalStrategy = {
+  const rawFinalStrategy = {
     ...strategyRaw,
     focusKeywords:     finalKeywords,
     recommendedAction: sanitizeOutput(refinedAction),
-    positioning:       sanitizeOutput(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
+    positioning:       sanitizeOutput(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent, cleaningDomain)),
     priceStrategy:     sanitizeOutput(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
-    quickWin:          sanitizeOutput(generateQuickWin(primaryIntent)),
+    quickWin:          sanitizeOutput(generateQuickWin(primaryIntent, cleaningDomain)),
     // Additive fields — frontend ignores unknown fields gracefully
     evidence,
     confidence,
     groundSignals:     groundSignals.topSignals,
   };
+
+  // ── Domain enforcement: rewrite cross-domain language, validate specificity ──
+  const finalStrategy = enforceFinalStrategy(rawFinalStrategy, cleaningDomain, primaryIntent);
 
   // ── Step 6: Sanitize all model text fields ───────────────────────────────
   const repairModel = (m) => ({
