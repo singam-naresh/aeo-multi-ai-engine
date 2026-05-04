@@ -5,7 +5,7 @@ import SearchBar from '../components/SearchBar';
 import ModelCard from '../components/ModelCard';
 import ComparisonCard from '../components/ComparisonCard';
 import StrategyCard from '../components/StrategyCard';
-import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle, LogOut, User } from 'lucide-react';
+import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle, LogOut, User, Info } from 'lucide-react';
 import { analyzeQuery, getStoredUser, clearToken } from '../services/api.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -27,15 +27,18 @@ interface FinalStrategy {
   recommendedAction: string;
   focusKeywords: string[];
   positioning: string;
-  priceStrategy: string;
+  priceStrategy: string | null;
   quickWin: string;
+  confidence?: number;
+  evidence?: string;
+  groundSignals?: string[];
 }
 
 interface ApiData {
-  groq: ModelResult;
-  gpt: ModelResult;
-  gemini: ModelResult;
-  comparison: Comparison;
+  groq:       ModelResult | null;
+  gpt:        ModelResult | null;
+  gemini:     ModelResult | null;
+  comparison: Comparison  | null;
   finalStrategy: FinalStrategy;
 }
 
@@ -76,17 +79,15 @@ export default function Home() {
     setCurrentUser(null);
   };
 
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const resultsRef     = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const resultsRef     = useRef<HTMLDivElement | null>(null);
 
-  // Refs for each model card so "Optimize for X" can scroll to it
-  const modelRefs: Record<string, React.RefObject<HTMLDivElement>> = {
-    groq:   useRef<HTMLDivElement>(null),
-    gpt:    useRef<HTMLDivElement>(null),
-    gemini: useRef<HTMLDivElement>(null),
+  const modelRefs: Record<string, React.RefObject<HTMLDivElement | null>> = {
+    groq:   useRef<HTMLDivElement | null>(null),
+    gpt:    useRef<HTMLDivElement | null>(null),
+    gemini: useRef<HTMLDivElement | null>(null),
   };
 
-  // Rotate loading message every 1.2 s while loading
   useEffect(() => {
     if (!isLoading) return;
     setLoadingMsgIdx(0);
@@ -117,14 +118,11 @@ export default function Home() {
     }
   };
 
-  // Called by keyword chips and Apply Strategy button
   const handleKeywordTrigger = (keyword: string) => {
     setPendingQuery(keyword);
-    // Focus the input after scroll animation settles
     setTimeout(() => searchInputRef.current?.focus(), 400);
   };
 
-  // Called by "Optimize for X" button in ComparisonCard
   const handleOptimizeModel = (modelName: string) => {
     const key = modelName.toLowerCase() as 'groq' | 'gpt' | 'gemini';
     setSelectedModel(key);
@@ -133,10 +131,11 @@ export default function Home() {
     }, 50);
   };
 
-  // Determine model key from comparison result
-  const bestKey = result
-    ? (result.comparison.bestModel.toLowerCase() as 'groq' | 'gpt' | 'gemini')
-    : null;
+  // Safe: null when comparison is absent (informational queries)
+  const bestKey = result?.comparison?.bestModel?.toLowerCase() as 'groq' | 'gpt' | 'gemini' | undefined;
+
+  // True when we have full multi-model data (product / platform queries)
+  const hasModelData = !!(result?.comparison && result?.groq && result?.gpt && result?.gemini);
 
   const modelList: Array<{ key: 'groq' | 'gpt' | 'gemini'; label: string }> = [
     { key: 'groq',   label: 'Groq (Llama 3)' },
@@ -270,58 +269,99 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* Results */}
-        {result && bestKey && (
+        {/* ── Results ── */}
+        {result && (
           <div ref={resultsRef} className="max-w-7xl mx-auto px-6 space-y-12 scroll-mt-32">
 
-            {/* 1. Final Strategy */}
-            <StrategyCard
-              strategy={result.finalStrategy}
-              onKeywordClick={handleKeywordTrigger}
-              onApplyStrategy={handleKeywordTrigger}
-            />
+            {/* Informational query — no model data, show clean message */}
+            {!hasModelData && (
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="flex items-start gap-4 p-6 bg-blue-500/10 border border-blue-500/20 rounded-2xl"
+              >
+                <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                  <Info size={20} className="text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-blue-400 mb-1">
+                    Informational Query
+                  </p>
+                  <p className="text-base font-semibold text-white mb-1">
+                    {result.finalStrategy.recommendedAction}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {result.finalStrategy.positioning}
+                  </p>
+                </div>
+              </motion.div>
+            )}
 
-            {/* 2. Model Cards */}
-            <div className="space-y-4">
-              {(() => {
-                const best       = modelList.find((m) => m.key === bestKey) ?? modelList[0];
-                const supporting = modelList.filter((m) => m.key !== bestKey);
+            {/* Strategy card — shown for all query types that have a finalStrategy */}
+            {result.finalStrategy && (
+              <StrategyCard
+                strategy={result.finalStrategy}
+                onKeywordClick={handleKeywordTrigger}
+                onApplyStrategy={handleKeywordTrigger}
+              />
+            )}
 
-                // When a model is selected, highlight it and dim others
-                const isHighlighted = (key: string) =>
-                  selectedModel === null ? true : selectedModel === key;
+            {/* Model cards + Comparison — only when full model data is present */}
+            {hasModelData && bestKey && result.groq && result.gpt && result.gemini && (
+              <>
+                {/* Model Cards */}
+                <div className="space-y-4">
+                  {(() => {
+                    const best       = modelList.find((m) => m.key === bestKey) ?? modelList[0];
+                    const supporting = modelList.filter((m) => m.key !== bestKey);
 
-                return (
-                  <>
-                    <ModelCard
-                      model={toModelCardProps(best.label, result[best.key])}
-                      index={0}
-                      isBest
-                      isHighlighted={isHighlighted(best.key)}
-                      cardRef={modelRefs[best.key]}
-                    />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {supporting.map((m, i) => (
+                    const isHighlighted = (key: string) =>
+                      selectedModel === null ? true : selectedModel === key;
+
+                    // Safe access — we've already confirmed these are non-null above
+                    const modelData: Record<string, ModelResult> = {
+                      groq:   result.groq,
+                      gpt:    result.gpt,
+                      gemini: result.gemini,
+                    };
+
+                    return (
+                      <>
                         <ModelCard
-                          key={m.key}
-                          model={toModelCardProps(m.label, result[m.key])}
-                          index={i + 1}
-                          isHighlighted={isHighlighted(m.key)}
-                          cardRef={modelRefs[m.key]}
+                          model={toModelCardProps(best.label, modelData[best.key])}
+                          index={0}
+                          isBest
+                          isHighlighted={isHighlighted(best.key)}
+                          cardRef={modelRefs[best.key]}
                         />
-                      ))}
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {supporting.map((m, i) => (
+                            <ModelCard
+                              key={m.key}
+                              model={toModelCardProps(m.label, modelData[m.key])}
+                              index={i + 1}
+                              isHighlighted={isHighlighted(m.key)}
+                              cardRef={modelRefs[m.key]}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
 
-            {/* 3. Comparison */}
-            <ComparisonCard
-              bestModel={result.comparison.bestModel}
-              reason={result.comparison.reason}
-              onOptimizeModel={handleOptimizeModel}
-            />
+                {/* Comparison — safe: only rendered when result.comparison is non-null */}
+                {result.comparison && (
+                  <ComparisonCard
+                    bestModel={result.comparison.bestModel}
+                    reason={result.comparison.reason}
+                    onOptimizeModel={handleOptimizeModel}
+                  />
+                )}
+              </>
+            )}
+
           </div>
         )}
       </main>

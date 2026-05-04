@@ -14,7 +14,7 @@ interface ModelCardProps {
   index: number;
   isBest?: boolean;
   isHighlighted?: boolean; // focused by "Optimize for X" button
-  cardRef?: React.RefObject<HTMLDivElement>;
+  cardRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 const ModelCard: React.FC<ModelCardProps> = ({

@@ -9,7 +9,7 @@ interface StrategyData {
   recommendedAction: string;
   focusKeywords: string[];
   positioning: string;
-  priceStrategy: string;
+  priceStrategy: string | null;
   quickWin: string;
 }
 
@@ -33,7 +33,7 @@ function buildClipboardText(strategy: StrategyData): string {
     `Recommended Action: ${strategy.recommendedAction}`,
     `Keywords: ${strategy.focusKeywords.join(', ')}`,
     `Positioning: ${strategy.positioning}`,
-    `Price Strategy: ${strategy.priceStrategy}`,
+    `Price Strategy: ${strategy.priceStrategy ?? 'N/A'}`,
     `Quick Win: ${strategy.quickWin}`,
   ].join('\n');
 }
@@ -146,7 +146,9 @@ const StrategyCard: React.FC<StrategyCardProps> = ({ strategy, onKeywordClick, o
               <DollarSign size={16} />
               <span className="text-xs font-bold uppercase tracking-widest">Price Strategy</span>
             </div>
-            <p className="text-sm text-white/80 leading-relaxed font-medium">{strategy.priceStrategy}</p>
+            <p className="text-sm text-white/80 leading-relaxed font-medium">
+              {strategy.priceStrategy ?? 'No pricing strategy applicable for this query type.'}
+            </p>
           </div>
         </div>
 

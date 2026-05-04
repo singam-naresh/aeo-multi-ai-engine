@@ -6,7 +6,7 @@ interface SearchBarProps {
   onSearch: (query: string) => void;
   isLoading: boolean;
   // Lifted ref so parent can focus + set value programmatically
-  inputRef?: React.RefObject<HTMLInputElement>;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
   externalQuery?: string;
   onExternalQueryConsumed?: () => void;
 }
