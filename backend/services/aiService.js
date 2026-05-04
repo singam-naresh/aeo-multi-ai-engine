@@ -5,105 +5,143 @@ const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 const FALLBACK_RESPONSE = {
   ranking: [
-    { name: 'Top Competitor Product',      rank: 1 },
-    { name: 'Category Leader Product',     rank: 2 },
-    { name: 'Popular Alternative Product', rank: 3 },
-    { name: 'Budget-Friendly Option',      rank: 4 },
-    { name: 'Premium Market Choice',       rank: 5 },
+    { name: 'Leading platform in this category',    rank: 1 },
+    { name: 'Established competitor with strong UX', rank: 2 },
+    { name: 'Fast-growing alternative',              rank: 3 },
+    { name: 'Budget-focused option',                 rank: 4 },
+    { name: 'Niche specialist in this space',        rank: 5 },
   ],
-  competitors: ['Market Leader', 'Category Challenger', 'Emerging Competitor'],
-  insights: 'Top products in this category rank higher due to strong brand authority, relevant keyword targeting, and consistent customer satisfaction signals.',
+  competitors: [
+    'top competitors in this category',
+    'established players in this space',
+    'emerging challengers',
+  ],
+  insights: 'Top results in this category rank higher due to strong relevance to search intent, clear value proposition, and consistent user trust signals.',
   suggestions: [
-    'Add detailed feature comparison against top competitors',
-    'Include real customer use-case examples in product description',
-    'Highlight key differentiators in the first bullet point',
+    'Add a detailed comparison against top competitors in this category',
+    'Include real user use-case examples to build credibility',
+    'Highlight the single strongest differentiator in the opening section',
   ],
 };
 
 // ─── Prompt Builders ────────────────────────────────────────────────────────
 
+// Detect whether a query is about a platform/service or a physical product
+function queryDomainHint(query) {
+  const q = query.toLowerCase();
+  if (/\bjob(s)?\b|\bcareer|\bresume|\bhiring|\brecruit|\bplatform|\bwebsite|\bapp\b|\bsoftware|\bsaas|\btool\b|\bai\b|\bchatbot|\bgenerator/.test(q))
+    return 'platform';
+  return 'product';
+}
+
 function buildPromptGroq(query) {
-  return `You are an expert Amazon SEO and product ranking analyst.
+  const domainType = queryDomainHint(query);
+  const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
+  const insightGuidance = domainType === 'platform'
+    ? 'Focus on: user experience, job matching quality, application flow, feature depth, and platform trust signals. Do NOT mention physical attributes.'
+    : 'Focus on: features, build quality, performance, pricing, and user satisfaction signals.';
+
+  return `You are an expert search ranking analyst.
 Analyze the query: ${query}
 Return ONLY valid JSON. Do NOT include any explanation.
+
+STRICT RULES:
+- Use REAL ${entityLabel} names (e.g. Indeed, LinkedIn, Apple, Samsung — whatever is relevant)
+- NEVER use placeholders like "Product A", "Top Product", "Category Leader", "Competitor X"
+- NEVER include percentages, CTR numbers, CVR numbers, or keyword density figures
+- Use qualitative reasoning only: "strong engagement", "high relevance", "clear positioning"
+- ${insightGuidance}
+
 JSON format:
 {
   "ranking": [
-    { "name": "real product name", "rank": 1 },
-    { "name": "real product name", "rank": 2 },
-    { "name": "real product name", "rank": 3 },
-    { "name": "real product name", "rank": 4 },
-    { "name": "real product name", "rank": 5 }
+    { "name": "real name here", "rank": 1 },
+    { "name": "real name here", "rank": 2 },
+    { "name": "real name here", "rank": 3 },
+    { "name": "real name here", "rank": 4 },
+    { "name": "real name here", "rank": 5 }
   ],
-  "competitors": ["real competitor names"],
-  "insights": "specific reason why top products rank higher based on keywords, pricing, positioning",
+  "competitors": ["real competitor names only"],
+  "insights": "qualitative explanation of why top results rank higher — no numbers, no percentages",
   "suggestions": [
-    "specific keyword improvement",
-    "specific positioning improvement",
-    "specific listing improvement"
+    "specific actionable improvement referencing a real feature or competitor",
+    "specific positioning or content improvement",
+    "specific trust or credibility improvement"
   ]
 }
-Important:
-- Use REAL product names (Nike, Adidas, etc.)
-- Give SPECIFIC insights, not generic
-- Output must be VALID JSON only`;
+Output VALID JSON only.`;
 }
 
 function buildPromptGPT(query) {
-  return `You are a senior business intelligence analyst specializing in e-commerce product strategy.
-Conduct a structured competitive analysis for the search query: "${query}"
+  const domainType = queryDomainHint(query);
+  const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
+  const insightGuidance = domainType === 'platform'
+    ? 'Analyze: user acquisition, feature differentiation, onboarding quality, and platform positioning. Avoid physical product language.'
+    : 'Analyze: market positioning, feature differentiation, pricing strategy, and user satisfaction drivers.';
+
+  return `You are a senior business intelligence analyst.
+Conduct a structured competitive analysis for: "${query}"
 Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
+
+STRICT RULES:
+- Use REAL ${entityLabel} names only — never "Product A", "Top Product", "Category Leader"
+- NEVER output percentages, CTR values, CVR values, or keyword density numbers
+- Use qualitative language: "strong brand authority", "clear value proposition", "high user trust"
+- ${insightGuidance}
+
 {
   "ranking": [
-    { "name": "exact product name", "rank": 1 },
-    { "name": "exact product name", "rank": 2 },
-    { "name": "exact product name", "rank": 3 },
-    { "name": "exact product name", "rank": 4 },
-    { "name": "exact product name", "rank": 5 }
+    { "name": "real name", "rank": 1 },
+    { "name": "real name", "rank": 2 },
+    { "name": "real name", "rank": 3 },
+    { "name": "real name", "rank": 4 },
+    { "name": "real name", "rank": 5 }
   ],
-  "competitors": ["brand or product competing in this space"],
-  "insights": "analytical breakdown of market positioning, keyword authority, pricing strategy, and conversion signals that drive top rankings",
+  "competitors": ["real competitor or platform names"],
+  "insights": "qualitative breakdown of why top results win — positioning, trust, relevance, user experience",
   "suggestions": [
-    "data-driven keyword targeting recommendation",
-    "competitive pricing or bundling strategy",
-    "listing optimization tactic based on top performer patterns",
-    "review acquisition or social proof strategy"
+    "actionable improvement with a specific feature or competitor reference",
+    "positioning or differentiation strategy",
+    "credibility or trust-building tactic"
   ]
 }
-Rules:
-- Use real, specific product names
-- Insights must reference business metrics (CTR, conversion, keyword density)
-- Suggestions must be actionable and measurable
-- Output VALID JSON only`;
+Output VALID JSON only.`;
 }
 
 function buildPromptGemini(query) {
-  return `You are a creative product discovery expert who understands what shoppers truly want.
-A shopper is searching for: "${query}"
-Imagine you are helping them find the perfect product. Think about their emotions, needs, and lifestyle.
+  const domainType = queryDomainHint(query);
+  const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
+  const insightGuidance = domainType === 'platform'
+    ? 'Think about: ease of use, job discovery quality, application experience, and what makes users return. Avoid physical product language.'
+    : 'Think about: what makes users choose this, emotional and practical appeal, and what drives repeat purchases.';
+
+  return `You are a user-focused product and platform analyst.
+A user is searching for: "${query}"
 Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
+
+STRICT RULES:
+- Use REAL ${entityLabel} names — never "Product A", "Top Product", "Category Leader", "Competitor X"
+- NEVER include percentages, CTR, CVR, or any numeric performance claims
+- Use human, qualitative language: "easy to use", "trusted by users", "strong community"
+- ${insightGuidance}
+
 {
   "ranking": [
-    { "name": "product name that shoppers love", "rank": 1 },
-    { "name": "product name that shoppers love", "rank": 2 },
-    { "name": "product name that shoppers love", "rank": 3 },
-    { "name": "product name that shoppers love", "rank": 4 },
-    { "name": "product name that shoppers love", "rank": 5 }
+    { "name": "real name", "rank": 1 },
+    { "name": "real name", "rank": 2 },
+    { "name": "real name", "rank": 3 },
+    { "name": "real name", "rank": 4 },
+    { "name": "real name", "rank": 5 }
   ],
-  "competitors": ["brands competing for this shopper's attention"],
-  "insights": "vivid explanation of why shoppers are drawn to these products — covering emotional appeal, lifestyle fit, visual presentation, and word-of-mouth buzz",
+  "competitors": ["real competitor or platform names"],
+  "insights": "human-focused explanation of why users prefer these results — no numbers, no percentages",
   "suggestions": [
-    "creative storytelling improvement for the product listing",
-    "visual or lifestyle imagery recommendation",
-    "user-generated content or community engagement idea",
-    "personalization or bundle idea that resonates with this audience"
+    "creative improvement referencing a real feature or user need",
+    "user experience or onboarding improvement",
+    "trust or community-building idea"
   ]
 }
-Rules:
-- Use real product names that shoppers actually search for
-- Insights must feel human and shopper-centric, not corporate
-- Suggestions must be creative and specific to this query
-- Output VALID JSON only`;
+Output VALID JSON only.`;
 }
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
@@ -132,10 +170,26 @@ function addEnhancements(data) {
   return { ...data, visibilityScore, improvementPotential };
 }
 
+// Placeholder patterns that should never appear in ranking or competitor names
+const PLACEHOLDER_NAME_RE = /^(product [a-e]|competitor [a-z]|top competitor product|category leader product|popular alternative product|budget-friendly option|premium market choice|market leader|category challenger|emerging competitor)$/i;
+
+function sanitizeName(name) {
+  if (!name || PLACEHOLDER_NAME_RE.test(name.trim())) return null;
+  return name;
+}
+
 function sanitizeResult(parsed) {
+  const ranking = Array.isArray(parsed.ranking)
+    ? parsed.ranking.filter((r) => r?.name && !PLACEHOLDER_NAME_RE.test(r.name.trim()))
+    : [];
+
+  const competitors = Array.isArray(parsed.competitors)
+    ? parsed.competitors.filter((c) => c && !PLACEHOLDER_NAME_RE.test(c.trim()))
+    : [];
+
   return {
-    ranking:     Array.isArray(parsed.ranking)     ? parsed.ranking     : FALLBACK_RESPONSE.ranking,
-    competitors: Array.isArray(parsed.competitors) ? parsed.competitors : FALLBACK_RESPONSE.competitors,
+    ranking:     ranking.length     ? ranking     : FALLBACK_RESPONSE.ranking,
+    competitors: competitors.length ? competitors : FALLBACK_RESPONSE.competitors,
     insights:    typeof parsed.insights === 'string' ? parsed.insights  : FALLBACK_RESPONSE.insights,
     suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : FALLBACK_RESPONSE.suggestions,
   };
@@ -377,26 +431,36 @@ function sanitizeOutput(text) {
   let t = removeFakeMetrics(text);
   t = repairText(t);
 
+  // ── Final sanity check: reject placeholder words ──────────────────────
+  // Replace known placeholder patterns with neutral qualitative language
+  t = t
+    .replace(/\bTop Competitor Product\b/gi, 'top competitor in this category')
+    .replace(/\bCategory Leader Product\b/gi, 'category leader')
+    .replace(/\bPopular Alternative Product\b/gi, 'popular alternative')
+    .replace(/\bBudget-Friendly Option\b/gi, 'budget-friendly option')
+    .replace(/\bPremium Market Choice\b/gi, 'premium option in this space')
+    .replace(/\bProduct [A-E]\b/gi, 'top competitor in this category')
+    .replace(/\bCompetitor [A-Z]\b/gi, 'top competitor in this category')
+    .replace(/\bCategory (Leader|Challenger|Winner)\b/gi, 'category leader')
+    .replace(/\bMarket Leader\b/gi, 'top competitor in this category')
+    .replace(/\bEmerging Competitor\b/gi, 'emerging competitor in this space')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
   // Remove sentences that became empty or near-empty after cleaning
-  // Split on sentence boundaries, filter, rejoin
   const sentences = t
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter((s) => {
       if (!s || s.length < 8) return false;
-      // Reject sentences that are only connectors/symbols
       if (/^[-–—:;,.\s]+$/.test(s)) return false;
-      // Reject sentences with "of and", "of or", "of ." patterns
       if (/\bof\s+(and|or|\.)/i.test(s)) return false;
-      // Reject sentences that start with a connector word
       if (/^(and|or|but|of|by|with|for|in|on|at|to)\b/i.test(s)) return false;
       return true;
     });
 
   const result = sentences.join(' ').trim();
-
-  // If sanitization emptied the text, return a safe neutral fallback
-  return result.length >= 10 ? result : 'Analysis based on current market positioning and competitive signals.';
+  return result.length >= 10 ? result : 'Top competitors in this category focus on strong positioning and user trust signals.';
 }
 
 // Normalise and validate keywords using the enhanced domain
