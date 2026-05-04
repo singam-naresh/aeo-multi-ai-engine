@@ -1381,6 +1381,204 @@ export function generateFinalStrategy(query, groq, gpt, gemini, comparison) {
   };
 }
 
+// ─── Decision + Humanization Layer ──────────────────────────────────────────
+
+// 1. Extract primary and secondary intent from a normalized query
+function extractIntent(normalizedQuery) {
+  const q = normalizedQuery.toLowerCase();
+
+  const intents = [];
+
+  // Ordered by specificity — first match wins for primary
+  if (/gaming|\bfps\b|\bgpu\b|graphics/.test(q))                    intents.push('gaming performance');
+  if (/camera|photo|low.light|portrait/.test(q))                    intents.push('camera quality');
+  if (/coding|programming|developer|software dev/.test(q))          intents.push('performance for development');
+  if (/\bai\b|chatbot|generator|llm/.test(q))                       intents.push('ai productivity');
+  if (/battery|endurance|long.lasting/.test(q))                     intents.push('battery life');
+  if (/student|college|university/.test(q))                         intents.push('student value');
+  if (/budget|under|cheap|affordable/.test(q))                      intents.push('budget');
+  if (/business|enterprise|professional/.test(q))                   intents.push('professional use');
+
+  return {
+    primary:   intents[0] || 'general performance',
+    secondary: intents[1] || null,
+  };
+}
+
+// 2. Detect price range from query for keyword generation
+function extractPriceRange(normalizedQuery) {
+  const m = normalizedQuery.match(/under\s+(\d+)/i);
+  if (!m) return null;
+  const n = parseInt(m[1]);
+  if (n >= 1000) return `under ${n}`;
+  return null; // sub-1000 numbers are likely not prices
+}
+
+// 3. Generate intent-driven, non-redundant keywords
+function generateIntentKeywords(intent, product, priceRange) {
+  const pr = priceRange ? ` ${priceRange}` : '';
+  const p  = product.trim();
+
+  const pools = {
+    'gaming performance': [
+      `gaming ${p}${pr}`,
+      `best budget gaming ${p}`,
+      `high fps ${p}${pr}`,
+      `best gaming ${p} for performance`,
+      `${p} for gaming${pr}`,
+    ],
+    'camera quality': [
+      `camera ${p}${pr}`,
+      `best photography ${p}`,
+      `${p} with best camera${pr}`,
+      `best ${p} for photos`,
+      `${p} low light camera`,
+    ],
+    'performance for development': [
+      `best laptops for coding`,
+      `laptop for programming students`,
+      `laptops for software development`,
+      `best laptops for software engineers`,
+      `budget laptops for coding`,
+    ],
+    'ai productivity': [
+      `best ai tools 2026`,
+      `ai tools for productivity`,
+      `ai automation tools`,
+      `chatgpt alternatives`,
+      `ai tools for developers`,
+    ],
+    'battery life': [
+      `${p} with best battery life`,
+      `long battery ${p}`,
+      `best ${p} battery life${pr}`,
+      `${p} for all day use`,
+      `best battery ${p}`,
+    ],
+    'student value': [
+      `best ${p} for students`,
+      `budget ${p} for college`,
+      `affordable ${p} for students`,
+      `${p} for students${pr}`,
+      `best student ${p}`,
+    ],
+    'budget': [
+      `best budget ${p}`,
+      `${p}${pr}`,
+      `affordable ${p}`,
+      `best ${p} under budget`,
+      `cheap ${p} good performance`,
+    ],
+    'professional use': [
+      `best ${p} for professionals`,
+      `professional ${p}`,
+      `${p} for business use`,
+      `enterprise ${p}`,
+      `best ${p} for work`,
+    ],
+    'general performance': [
+      `best ${p} 2026`,
+      `top rated ${p}`,
+      `best ${p} for everyday use`,
+      `${p} buying guide`,
+      `best value ${p}`,
+    ],
+  };
+
+  const raw = pools[intent] || pools['general performance'];
+
+  // Enforce 2–6 words, no duplicates
+  const seen = new Set();
+  return raw
+    .map((kw) => kw.trim().replace(/\s{2,}/g, ' '))
+    .filter((kw) => {
+      const words = kw.split(' ');
+      if (words.length < 2 || words.length > 6) return false;
+      if (seen.has(kw)) return false;
+      seen.add(kw);
+      return true;
+    })
+    .slice(0, 5);
+}
+
+// 4. Remove redundant keywords — if two phrases share the same core meaning, keep the stronger one
+function removeKeywordRedundancy(keywords) {
+  // Pairs of synonymous intent patterns — if both present, drop the weaker (later) one
+  const REDUNDANT_PAIRS = [
+    [/laptops? for developers?/i,    /laptops? for programming/i],
+    [/laptops? for coding/i,         /laptops? for software dev/i],
+    [/gaming phone/i,                /phone for gaming/i],
+    [/budget gaming/i,               /affordable gaming/i],
+    [/best budget/i,                 /cheap/i],
+    [/photography/i,                 /camera quality/i],
+  ];
+
+  const result = [...keywords];
+  for (const [strongPat, weakPat] of REDUNDANT_PAIRS) {
+    const hasStrong = result.some((k) => strongPat.test(k));
+    if (hasStrong) {
+      const weakIdx = result.findIndex((k) => weakPat.test(k));
+      if (weakIdx !== -1) result.splice(weakIdx, 1);
+    }
+  }
+  return result.slice(0, 5);
+}
+
+// 5. Generate a human-sounding recommended action (not templated)
+function generateHumanStrategy(primaryIntent, topProduct) {
+  const p = topProduct || 'the top competitor';
+
+  const templates = {
+    'gaming performance': `Focus on raw gaming performance — highlight FPS stability, cooling system, and battery endurance better than ${p}`,
+    'camera quality':     `Win on camera clarity — emphasize low-light performance and real photo samples that outperform ${p}`,
+    'performance for development': `Position as a developer-first machine — better keyboard, RAM options, and Linux compatibility than ${p}`,
+    'ai productivity':    `Differentiate from ${p} by targeting a specific niche — developers, creators, or marketers — with purpose-built AI workflows`,
+    'battery life':       `Lead with endurance — show real-world battery benchmarks and all-day usage scenarios that outlast ${p}`,
+    'student value':      `Own the student segment — bundle software, offer education pricing, and highlight portability advantages over ${p}`,
+    'budget':             `Compete on value — match ${p}'s core specs at a lower price and make the price-to-performance gap impossible to ignore`,
+    'professional use':   `Target professionals who need reliability — highlight security features, build quality, and support options vs ${p}`,
+    'general performance':`Outperform ${p} where it matters most — identify its weakest reviewed feature and make that your headline strength`,
+  };
+
+  return templates[primaryIntent] || templates['general performance'];
+}
+
+// 6. Generate a sharp, intent-driven positioning statement
+function generatePositioning(primaryIntent, priceType) {
+  const isBudget = priceType === 'budget' || primaryIntent === 'budget' || primaryIntent === 'student value';
+
+  const map = {
+    'gaming performance':          isBudget ? 'Budget gaming device built for consistent FPS performance'         : 'High-performance gaming device built for competitive play',
+    'camera quality':              isBudget ? 'Camera-focused device for users who prioritize image quality on a budget' : 'Camera-first device for photography enthusiasts',
+    'performance for development': isBudget ? 'Budget developer laptop with strong processing power and portability' : 'Performance-first laptop tailored for developers and engineers',
+    'ai productivity':             'AI productivity platform focused on automation, speed, and ease of use',
+    'battery life':                'Long-lasting device built for all-day productivity without compromise',
+    'student value':               'Affordable, capable device designed for students who need performance and portability',
+    'budget':                      'Value-first device offering competitive specs without the premium price tag',
+    'professional use':            'Professional-grade device built for reliability, security, and all-day performance',
+    'general performance':         'Well-rounded device offering strong performance and reliable everyday use',
+  };
+
+  return map[primaryIntent] || map['general performance'];
+}
+
+// 7. Generate a sharp, intent-specific quick win
+function generateQuickWin(primaryIntent) {
+  const map = {
+    'gaming performance':          'Show real gameplay FPS benchmarks in product images',
+    'camera quality':              'Add side-by-side camera comparisons vs top competitor in listing',
+    'performance for development': 'Show coding setup with VS Code and terminal in hero image',
+    'ai productivity':             'Add a 60-second product demo video to the landing page',
+    'battery life':                'Show screen-on time benchmark vs top competitor in hero image',
+    'student value':               'Add student discount badge and bundle offer on listing',
+    'budget':                      'Add spec comparison chart vs top competitor at same price point',
+    'professional use':            'Highlight security certifications and enterprise support in listing',
+    'general performance':         'Add feature comparison table vs top 3 competitors in listing',
+  };
+
+  return map[primaryIntent] || map['general performance'];
+}
+
 // ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
 
 export async function analyzeWithMultipleModels(query) {
@@ -1407,23 +1605,41 @@ export async function analyzeWithMultipleModels(query) {
   const comparison  = compareModels(groqResult, gptResult, geminiResult);
   const strategyRaw = generateFinalStrategy(normalizedQuery, groqResult, gptResult, geminiResult, comparison);
 
-  // ── Step 4: Normalize & repair finalStrategy ──────────────────────────────
-  // Keywords: validate → normalize with enhanced domain
-  const validatedKeywords   = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
-  const normalizedKeywords  = normalizeKeywords(
+  // ── Step 4: Decision + Humanization layer ────────────────────────────────
+  const { primary: primaryIntent, secondary: secondaryIntent } = extractIntent(normalizedQuery);
+  const priceRange   = extractPriceRange(normalizedQuery);
+  const topProduct   = groqResult.ranking?.[0]?.name || gptResult.ranking?.[0]?.name || 'the top competitor';
+
+  // Extract the core product noun from the normalized query for keyword generation
+  // Strip modifiers, price ranges, and intent words to get the base product
+  const productNoun = normalizedQuery
+    .replace(/\b(best|budget|top|cheap|affordable|premium|gaming|camera|coding|under\s+\d+)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim() || normalizedQuery.split(' ').slice(-1)[0];
+
+  // Generate intent-driven keywords, then remove redundancy
+  const intentKeywords = generateIntentKeywords(primaryIntent, productNoun, priceRange);
+  const dedupedKeywords = removeKeywordRedundancy(intentKeywords);
+
+  // Fall back to validated AI keywords if intent keywords are too generic
+  const validatedKeywords  = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
+  const normalizedKeywords = normalizeKeywords(
     validatedKeywords.length >= 3 ? validatedKeywords : strategyRaw.focusKeywords,
     normalizedQuery,
     enhancedDomain,
   );
-  console.log('FINAL KEYWORDS:', normalizedKeywords);
+
+  // Prefer intent keywords when they're specific; fall back to AI-derived ones
+  const finalKeywords = dedupedKeywords.length >= 3 ? dedupedKeywords : normalizedKeywords;
+  console.log('FINAL KEYWORDS:', finalKeywords);
 
   const finalStrategy = {
     ...strategyRaw,
-    focusKeywords:     normalizedKeywords.length >= 2 ? normalizedKeywords : strategyRaw.focusKeywords,
-    recommendedAction: repairText(removeFakeMetrics(strategyRaw.recommendedAction)),
-    positioning:       repairText(cleanByDomain(removeFakeMetrics(strategyRaw.positioning), cleaningDomain)),
+    focusKeywords:     finalKeywords,
+    recommendedAction: repairText(generateHumanStrategy(primaryIntent, topProduct)),
+    positioning:       repairText(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
     priceStrategy:     repairText(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
-    quickWin:          repairText(removeFakeMetrics(strategyRaw.quickWin)),
+    quickWin:          generateQuickWin(primaryIntent),
   };
 
   // ── Step 5: Repair model insights ────────────────────────────────────────
