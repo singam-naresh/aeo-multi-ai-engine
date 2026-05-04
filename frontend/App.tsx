@@ -7,6 +7,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 import Home from './src/pages/Home.tsx';
 import NotFound from './src/pages/NotFound.tsx';
+import Analytics from './src/pages/Analytics.tsx';
 
 const App: React.FC = () => {
   return (
@@ -15,6 +16,7 @@ const App: React.FC = () => {
         <main className="min-h-screen font-sans selection:bg-purple-500/30">
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/analytics" element={<Analytics />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
           <ToastContainer

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import SearchBar from '../components/SearchBar';
 import ModelCard from '../components/ModelCard';
 import ComparisonCard from '../components/ComparisonCard';
@@ -152,6 +153,7 @@ export default function Home() {
             <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Dashboard</a>
             <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">API Docs</a>
             <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
+            <Link to="/analytics" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">Analytics</Link>
             <button className="px-5 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-semibold transition-all">
               Sign In
             </button>

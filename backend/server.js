@@ -1,9 +1,10 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import analyzeRouter from './routes/analyze.js';
+import analyzeRouter   from './routes/analyze.js';
+import analyticsRouter from './routes/analytics.js';
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
@@ -16,6 +17,7 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api', analyzeRouter);
+app.use('/api', analyticsRouter);
 
 // Start server
 app.listen(PORT, () => {

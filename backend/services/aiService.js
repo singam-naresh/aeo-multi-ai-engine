@@ -1752,7 +1752,7 @@ const GROUND_SIGNAL_VOCAB = [
   'coding', 'programming', 'developer', 'gaming', 'photography', 'student',
 ];
 
-// 1. Extract ground signals from AI insights (no network call — fast, honest)
+// 1. Extract ground signals from AI insights + optional scraped titles
 //    Counts how many times each signal word appears across all model insights
 async function getGroundSignals(query, modelInsights) {
   const combined = modelInsights.join(' ').toLowerCase();
@@ -1761,6 +1761,19 @@ async function getGroundSignals(query, modelInsights) {
   for (const term of GROUND_SIGNAL_VOCAB) {
     const matches = combined.match(new RegExp(`\\b${term}\\b`, 'gi'));
     if (matches && matches.length > 0) counts[term] = matches.length;
+  }
+
+  // ── Enrich with scraped titles (non-blocking, best-effort) ──────────────
+  try {
+    const { fetchTopSearchTitles, extractSignalsFromTitles } = await import('./scraperService.js');
+    const titles = await fetchTopSearchTitles(query);
+    const scrapedSignals = extractSignalsFromTitles(titles);
+    // Boost scraped signals by 1 count each (they confirm real-world relevance)
+    for (const term of scrapedSignals) {
+      counts[term] = (counts[term] || 0) + 1;
+    }
+  } catch (_) {
+    // Scraping is optional — silently ignore any failure
   }
 
   // Sort by frequency, return top 5 signal words
