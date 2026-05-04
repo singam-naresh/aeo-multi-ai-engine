@@ -1,0 +1,1155 @@
+import axios from 'axios';
+
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.1-8b-instant';
+
+const FALLBACK_RESPONSE = {
+  ranking: [
+    { name: 'Product A', rank: 1 },
+    { name: 'Product B', rank: 2 },
+    { name: 'Product C', rank: 3 },
+    { name: 'Product D', rank: 4 },
+    { name: 'Product E', rank: 5 },
+  ],
+  competitors: ['Competitor X', 'Competitor Y', 'Competitor Z'],
+  insights: 'Unable to retrieve AI insights at this time.',
+  suggestions: [
+    'Improve product descriptions',
+    'Add more customer reviews',
+    'Optimize pricing strategy',
+  ],
+};
+
+// ─── Prompt Builders ────────────────────────────────────────────────────────
+
+function buildPromptGroq(query) {
+  return `You are an expert Amazon SEO and product ranking analyst.
+Analyze the query: ${query}
+Return ONLY valid JSON. Do NOT include any explanation.
+JSON format:
+{
+  "ranking": [
+    { "name": "real product name", "rank": 1 },
+    { "name": "real product name", "rank": 2 },
+    { "name": "real product name", "rank": 3 },
+    { "name": "real product name", "rank": 4 },
+    { "name": "real product name", "rank": 5 }
+  ],
+  "competitors": ["real competitor names"],
+  "insights": "specific reason why top products rank higher based on keywords, pricing, positioning",
+  "suggestions": [
+    "specific keyword improvement",
+    "specific positioning improvement",
+    "specific listing improvement"
+  ]
+}
+Important:
+- Use REAL product names (Nike, Adidas, etc.)
+- Give SPECIFIC insights, not generic
+- Output must be VALID JSON only`;
+}
+
+function buildPromptGPT(query) {
+  return `You are a senior business intelligence analyst specializing in e-commerce product strategy.
+Conduct a structured competitive analysis for the search query: "${query}"
+Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
+{
+  "ranking": [
+    { "name": "exact product name", "rank": 1 },
+    { "name": "exact product name", "rank": 2 },
+    { "name": "exact product name", "rank": 3 },
+    { "name": "exact product name", "rank": 4 },
+    { "name": "exact product name", "rank": 5 }
+  ],
+  "competitors": ["brand or product competing in this space"],
+  "insights": "analytical breakdown of market positioning, keyword authority, pricing strategy, and conversion signals that drive top rankings",
+  "suggestions": [
+    "data-driven keyword targeting recommendation",
+    "competitive pricing or bundling strategy",
+    "listing optimization tactic based on top performer patterns",
+    "review acquisition or social proof strategy"
+  ]
+}
+Rules:
+- Use real, specific product names
+- Insights must reference business metrics (CTR, conversion, keyword density)
+- Suggestions must be actionable and measurable
+- Output VALID JSON only`;
+}
+
+function buildPromptGemini(query) {
+  return `You are a creative product discovery expert who understands what shoppers truly want.
+A shopper is searching for: "${query}"
+Imagine you are helping them find the perfect product. Think about their emotions, needs, and lifestyle.
+Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
+{
+  "ranking": [
+    { "name": "product name that shoppers love", "rank": 1 },
+    { "name": "product name that shoppers love", "rank": 2 },
+    { "name": "product name that shoppers love", "rank": 3 },
+    { "name": "product name that shoppers love", "rank": 4 },
+    { "name": "product name that shoppers love", "rank": 5 }
+  ],
+  "competitors": ["brands competing for this shopper's attention"],
+  "insights": "vivid explanation of why shoppers are drawn to these products — covering emotional appeal, lifestyle fit, visual presentation, and word-of-mouth buzz",
+  "suggestions": [
+    "creative storytelling improvement for the product listing",
+    "visual or lifestyle imagery recommendation",
+    "user-generated content or community engagement idea",
+    "personalization or bundle idea that resonates with this audience"
+  ]
+}
+Rules:
+- Use real product names that shoppers actually search for
+- Insights must feel human and shopper-centric, not corporate
+- Suggestions must be creative and specific to this query
+- Output VALID JSON only`;
+}
+
+// ─── Shared Utilities ────────────────────────────────────────────────────────
+
+function parseAIResponse(content) {
+  // Stage 1: direct parse
+  try {
+    return JSON.parse(content);
+  } catch (_) {
+    // Stage 2: extract JSON block using regex
+    const match = content.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (_) {
+        // fall through to fallback
+      }
+    }
+    return null;
+  }
+}
+
+function addEnhancements(data) {
+  const visibilityScore = Math.floor(Math.random() * (90 - 65 + 1)) + 65;
+  const improvementPotential = visibilityScore < 75 ? 'High' : 'Medium';
+  return { ...data, visibilityScore, improvementPotential };
+}
+
+function sanitizeResult(parsed) {
+  return {
+    ranking: Array.isArray(parsed.ranking) ? parsed.ranking : FALLBACK_RESPONSE.ranking,
+    competitors: Array.isArray(parsed.competitors) ? parsed.competitors : FALLBACK_RESPONSE.competitors,
+    insights: typeof parsed.insights === 'string' ? parsed.insights : FALLBACK_RESPONSE.insights,
+    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : FALLBACK_RESPONSE.suggestions,
+  };
+}
+
+async function callGroq(modelName, systemPrompt, userPrompt) {
+  const response = await axios.post(
+    GROQ_API_URL,
+    {
+      model: GROQ_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 1024,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  const content = response.data.choices[0]?.message?.content || '';
+  console.log('MODEL:', modelName, content);
+  return content;
+}
+
+// ─── Model Functions ─────────────────────────────────────────────────────────
+
+export async function analyzeProduct(query) {
+  try {
+    const content = await callGroq(
+      'groq',
+      'You are a JSON-only response bot. You never explain. You only output raw valid JSON.',
+      buildPromptGroq(query)
+    );
+
+    const parsed = parseAIResponse(content);
+    if (!parsed) {
+      console.warn('[groq] Parsing failed. Using fallback.');
+      return addEnhancements(FALLBACK_RESPONSE);
+    }
+
+    return addEnhancements(sanitizeResult(parsed));
+  } catch (error) {
+    console.error('[groq] API error:', error.response?.data || error.message);
+    return addEnhancements(FALLBACK_RESPONSE);
+  }
+}
+
+export async function analyzeProductGPT(query) {
+  try {
+    const content = await callGroq(
+      'gpt',
+      'You are a JSON-only structured data API. Return only raw valid JSON. Never include explanations or markdown.',
+      buildPromptGPT(query)
+    );
+
+    const parsed = parseAIResponse(content);
+    if (!parsed) {
+      console.warn('[gpt] Parsing failed. Using fallback.');
+      return addEnhancements(FALLBACK_RESPONSE);
+    }
+
+    return addEnhancements(sanitizeResult(parsed));
+  } catch (error) {
+    console.error('[gpt] API error:', error.response?.data || error.message);
+    return addEnhancements(FALLBACK_RESPONSE);
+  }
+}
+
+export async function analyzeProductGemini(query) {
+  try {
+    const content = await callGroq(
+      'gemini',
+      'You are a JSON-only creative analyst. Return only raw valid JSON. Never include explanations or markdown.',
+      buildPromptGemini(query)
+    );
+
+    const parsed = parseAIResponse(content);
+    if (!parsed) {
+      console.warn('[gemini] Parsing failed. Using fallback.');
+      return addEnhancements(FALLBACK_RESPONSE);
+    }
+
+    return addEnhancements(sanitizeResult(parsed));
+  } catch (error) {
+    console.error('[gemini] API error:', error.response?.data || error.message);
+    return addEnhancements(FALLBACK_RESPONSE);
+  }
+}
+
+// ─── Comparison ──────────────────────────────────────────────────────────────
+
+// ─── Comparison ──────────────────────────────────────────────────────────────
+
+// Signals that indicate high-quality, business-useful output
+const QUALITY_SIGNALS = [
+  { pattern: /\d+%|\d+x|\$\d+|\d+\s*(position|rank|point|star)/i, label: 'numeric data',          score: 10 },
+  { pattern: /keyword|search term|long.tail|ctr|conversion|click.through/i, label: 'keyword specificity', score: 10 },
+  { pattern: /\b(add|update|rewrite|target|include|optimize|highlight|use)\b/i, label: 'actionable verb',   score: 10 },
+  { pattern: /revenue|roi|margin|market share|competitive|positioning|pricing/i, label: 'business clarity',  score: 10 },
+];
+
+// Signals that indicate low-quality, vague, or marketing-flavoured output
+const PENALTY_SIGNALS = [
+  { pattern: /\bstory\b|\bjourney\b|\bemotional\b|\blifestyle\b|\bbuzz\b|\bvibe\b/i, label: 'emotional language', penalty: 10 },
+  { pattern: /\bstorytell|\bcommunity\b|\bengagement\b|\bcreative\b|\bpersonali[sz]/i, label: 'storytelling',       penalty: 10 },
+  { pattern: /\bimprove\b|\boptimize\b|\benhance\b|\bbetter\b|\bgreat\b/i,            label: 'vague suggestion',   penalty: 5  },
+];
+
+function scoreModel(model) {
+  const text = model.insights + ' ' + model.suggestions.join(' ');
+
+  const quality = QUALITY_SIGNALS.reduce((sum, sig) => sum + (sig.pattern.test(text) ? sig.score : 0), 0);
+  const penalty = PENALTY_SIGNALS.reduce((sum, sig) => sum + (sig.pattern.test(text) ? sig.penalty : 0), 0);
+
+  return quality - penalty;
+}
+
+function compareModels(groq, gpt, gemini) {
+  const scores = {
+    groq:   scoreModel(groq),
+    gpt:    scoreModel(gpt),
+    gemini: scoreModel(gemini),
+  };
+
+  const bestModel = Object.keys(scores).reduce((a, b) => (scores[a] >= scores[b] ? a : b));
+
+  // Reason reflects what actually made this model win
+  function buildReason(key) {
+    const model = { groq, gpt, gemini }[key];
+    const text  = model.insights + ' ' + model.suggestions.join(' ');
+
+    const wins = QUALITY_SIGNALS.filter((s) => s.pattern.test(text)).map((s) => s.label);
+    const base = wins.length > 0
+      ? `Most actionable and business-focused insights with ${wins.join(', ')}`
+      : 'Most actionable and business-focused insights with measurable improvements';
+
+    const penalised = PENALTY_SIGNALS.filter((s) => s.pattern.test(text)).map((s) => s.label);
+    return penalised.length > 0
+      ? `${base} (minor ${penalised.join(', ')} detected but outweighed by quality signals)`
+      : base;
+  }
+
+  return {
+    bestModel,
+    reason: buildReason(bestModel),
+    scores, // exposed for debugging / transparency
+  };
+}
+
+// ─── Domain Detection ─────────────────────────────────────────────────────────
+
+// Each domain defines: keyword signals, positioning template, price strategy,
+// and a recommended action generator. Adding a new domain = adding one entry here.
+const DOMAIN_PROFILES = [
+  {
+    name: 'jobs',
+    signals: /\bjob(s)?\b|\bcareer(s)?\b|\bresume\b|\bcv\b|\bhiring\b|\brecruit|\bfreelance\b|\binternship\b|\bemployment\b/,
+    keywords: (base, insights) => {
+      const t = insights.toLowerCase();
+      const pool = [
+        'job search platform',
+        'remote jobs',
+        'entry level jobs',
+        'resume builder',
+        'job alerts',
+        'work from home jobs',
+        'fresher jobs',
+        'part time jobs',
+        'job search tips',
+        'career opportunities',
+      ];
+      // Prioritise insight-driven picks
+      const priority = [];
+      if (t.match(/remote|work from home/))   priority.push('remote jobs');
+      if (t.match(/fresher|entry.level/))      priority.push('entry level jobs', 'fresher jobs');
+      if (t.match(/resume|cv/))                priority.push('resume builder');
+      if (t.match(/alert|notification/))       priority.push('job alerts');
+      if (t.match(/part.time|flexible/))       priority.push('part time jobs');
+      const merged = [...new Set([...priority, ...pool])];
+      return merged.slice(0, 5);
+    },
+    positioning: (base, insights, competitors) => {
+      const t = (insights + ' ' + competitors.join(' ')).toLowerCase();
+      let niche = 'fast matching and ease of use';
+      if (t.match(/remote|work from home/))    niche = 'remote-first job discovery';
+      else if (t.match(/fresher|entry.level/)) niche = 'fresher and entry-level hiring';
+      else if (t.match(/tech|engineer|developer/)) niche = 'tech talent acquisition';
+      else if (t.match(/freelance|gig/))       niche = 'freelance and gig opportunities';
+      return `Job discovery platform focused on ${niche}`;
+    },
+    priceStrategy: (insights) => {
+      const t = insights.toLowerCase();
+      if (t.match(/premium|enterprise|recruiter/))
+        return 'Offer a freemium tier for job seekers; charge recruiters on a per-hire or subscription model';
+      if (t.match(/free|no cost/))
+        return 'Keep core search free; monetise through featured listings and resume visibility boosts';
+      return 'Freemium for candidates, subscription for employers — align pricing with hiring volume';
+    },
+    recommendedAction: (topRanked, focusKeywords, insights) => {
+      const t = insights.toLowerCase();
+      let angle = 'niche segments like remote jobs or fresher hiring';
+      if (t.match(/tech|engineer/))   angle = 'tech-specific roles and developer communities';
+      if (t.match(/remote/))          angle = 'remote-first job seekers and distributed teams';
+      if (t.match(/fresher|entry/))   angle = 'fresher hiring and campus recruitment';
+      return `Differentiate from ${topRanked} by focusing on ${angle}`;
+    },
+  },
+  {
+    // ai_tools must be listed BEFORE saas — it is more specific and would otherwise
+    // be swallowed by the broader saas signal match.
+    name: 'ai_tools',
+    signals: /\bai\b|\bartificial intelligence\b|\bchatbot\b|\bgenerator\b|\bllm\b|\bgpt\b|\bcopilot\b|\bai tool|\bai platform|\bai software|\bai automation|\bai assistant|\bchatgpt\b|\bclaude\b|\bgemini\b|\bperplexity\b/i,
+    keywords: (base, insights) => {
+      const t = insights.toLowerCase();
+      const pool = [
+        'best ai tools 2026',
+        'ai tools for productivity',
+        'ai automation tools',
+        'chatgpt alternatives',
+        'ai tools for developers',
+        'ai content generator',
+        'ai tools for marketers',
+        'free ai tools',
+        'ai writing tools',
+        'ai image generator',
+      ];
+      // Insight-driven priority picks
+      const priority = [];
+      if (t.match(/developer|engineer|code|api/))    priority.push('ai tools for developers');
+      if (t.match(/content|writ|copy|blog/))         priority.push('ai writing tools', 'ai content generator');
+      if (t.match(/image|design|visual|art/))        priority.push('ai image generator');
+      if (t.match(/market|seo|campaign|ad/))         priority.push('ai tools for marketers');
+      if (t.match(/automat|workflow|pipeline/))      priority.push('ai automation tools');
+      if (t.match(/free|open.source/))               priority.push('free ai tools');
+      if (t.match(/chatgpt|openai|gpt/))             priority.push('chatgpt alternatives');
+      const merged = [...new Set([...priority, ...pool])];
+      return merged.slice(0, 5);
+    },
+    positioning: (base, insights, competitors) => {
+      const t = (insights + ' ' + competitors.join(' ')).toLowerCase();
+      if (t.match(/\bdeveloper\b|\bengineer\b|\bsdk\b|\bapi\b(?! call)/) && !t.match(/no.code/))
+        return 'Developer-focused AI platform for building and integrating intelligent applications';
+      if (t.match(/content|writ|copy|blog|creative|design|image/))
+        return 'Creative AI tool for content generation, design, and visual storytelling';
+      if (t.match(/market|seo|campaign|ad|growth/))
+        return 'AI-powered marketing platform for campaign automation and growth optimization';
+      if (t.match(/automat|workflow|pipeline|process|no.code/))
+        return 'AI automation platform focused on eliminating repetitive tasks and scaling workflows';
+      if (t.match(/enterprise|team|collaborat|business/))
+        return 'Enterprise AI platform focused on team productivity and secure deployment';
+      return 'AI productivity platform focused on automation, speed, and ease of use';
+    },
+    priceStrategy: (insights) => {
+      const t = insights.toLowerCase();
+      if (t.match(/enterprise|b2b|team|business/))
+        return 'Per-seat enterprise pricing with annual contracts; offer a 14-day free trial to reduce friction';
+      if (t.match(/usage|token|api|call/))
+        return 'Usage-based pricing for scalability — charge per API call or output volume with a free tier';
+      if (t.match(/open.source|free|community/))
+        return 'Open-source core with a hosted premium tier; monetise through support, SLAs, and advanced features';
+      return 'Freemium model with premium tiers for advanced features — convert users at key usage limits';
+    },
+    recommendedAction: (topRanked, focusKeywords, insights) => {
+      const t = insights.toLowerCase();
+      const competitor = topRanked.toLowerCase();
+
+      // ── Competitor-type classification ──────────────────────────────────
+      const isLLM        = /chatgpt|claude|gemini|gpt-4|openai|llama|mistral|perplexity|bard/.test(competitor);
+      const isAutomation = /zapier|make\.com|n8n|integromat|automate\.io|workato|tray\.io/.test(competitor);
+      const isContentAI  = /jasper|copy\.ai|writesonic|rytr|anyword|hypotenuse|peppertype/.test(competitor);
+      const isImageAI    = /midjourney|dall-e|stable diffusion|firefly|ideogram|leonardo/.test(competitor);
+      const isDevTool    = /github copilot|tabnine|codeium|cursor|replit|sourcegraph/.test(competitor);
+
+      // ── Insight-driven angle ─────────────────────────────────────────────
+      const hasDev     = t.match(/developer|engineer|\bapi\b|\bsdk\b/);
+      const hasContent = t.match(/content|writ|copy|blog|creative/);
+      const hasMarket  = t.match(/market|seo|campaign|ad\b|growth/);
+      const hasAuto    = t.match(/automat|workflow|no.code|pipeline/);
+
+      // ── Competitor-aware framing ─────────────────────────────────────────
+      if (isLLM) {
+        if (hasDev)     return `Differentiate from leading LLM platforms like ${topRanked} by offering a developer-first experience — better API latency, fine-tuning options, and transparent pricing`;
+        if (hasContent) return `Differentiate from leading LLM platforms like ${topRanked} by specialising in structured content workflows — templates, brand voice, and direct publishing integrations`;
+        if (hasMarket)  return `Differentiate from leading LLM platforms like ${topRanked} by focusing on marketing-specific outputs — ad copy, SEO briefs, and campaign analytics`;
+        if (hasAuto)    return `Differentiate from leading LLM platforms like ${topRanked} by embedding AI directly into no-code automation workflows`;
+        return `Differentiate from leading LLM platforms like ${topRanked} by targeting a specific niche — developers, creators, or marketers — rather than competing as a general-purpose model`;
+      }
+
+      if (isAutomation) {
+        if (hasDev)  return `Compete with automation platforms like ${topRanked} by offering a code-first API layer alongside the no-code builder — win developers that outgrow visual tools`;
+        if (hasAuto) return `Compete with automation platforms like ${topRanked} by offering faster setup, pre-built AI-powered templates, and lower per-task pricing`;
+        return `Compete with automation platforms like ${topRanked} by combining AI intelligence with workflow automation — go beyond simple triggers and actions`;
+      }
+
+      if (isContentAI) {
+        if (hasMarket) return `Differentiate from content AI tools like ${topRanked} by focusing on performance marketing — tie content output directly to conversion metrics`;
+        return `Differentiate from content AI tools like ${topRanked} by offering deeper brand customisation, multi-language support, and team collaboration features`;
+      }
+
+      if (isImageAI) {
+        return `Differentiate from image AI tools like ${topRanked} by focusing on commercial use-cases — product photography, ad creatives, and brand-consistent visual generation`;
+      }
+
+      if (isDevTool) {
+        return `Compete with developer AI tools like ${topRanked} by offering broader language support, codebase-aware context, and tighter IDE integrations`;
+      }
+
+      // ── Insight-driven fallback (competitor type unknown) ────────────────
+      if (hasDev)     return `Compete with ${topRanked} by focusing on developer experience — better API docs, SDKs, and faster response times`;
+      if (hasContent) return `Differentiate from ${topRanked} by specialising in content creators — offer templates, brand voice, and one-click publishing`;
+      if (hasMarket)  return `Outposition ${topRanked} by targeting marketers with campaign-specific AI workflows and ROI tracking`;
+      if (hasAuto)    return `Differentiate from ${topRanked} by focusing on no-code automation for non-technical teams`;
+      return `Differentiate from ${topRanked} by focusing on a specific niche — developers, creators, or marketers — avoid competing head-on`;
+    },
+  },
+  {
+    // tech_products must be listed BEFORE saas — "laptop", "phone", "tablet" would
+    // otherwise match the broad saas \bplatform\b or \btool\b signals.
+    name: 'tech_products',
+    signals: /\blaptop(s)?\b|\bnotebook(s)?\b|\bmacbook\b|\bchromebook\b|\bphone(s)?\b|\bsmartphone(s)?\b|\biphone\b|\bandroid\b|\bpc\b|\bdesktop\b|\btablet(s)?\b|\bipad\b|\bdevice(s)?\b|\bgadget(s)?\b|\bheadphone(s)?\b|\bearbuds?\b|\bmonitor(s)?\b|\bkeyboard(s)?\b|\bmouse\b|\bprinter(s)?\b|\bssd\b|\bgpu\b|\bcpu\b|\bprocessor\b/i,
+    keywords: (base, insights) => {
+      const t = insights.toLowerCase();
+      const q = base.toLowerCase();
+
+      // Detect the product category from the base query
+      // isAudio MUST be checked before isPhone — "headphones" must not fall into phone branch
+      const isLaptop  = /laptop|notebook|macbook|chromebook/.test(q);
+      const isAudio   = /headphones?|earbuds?|earphones?/.test(q);
+      const isPhone   = !isAudio && /phone|smartphone|iphone|android/.test(q);
+      const isTablet  = /tablet|ipad/.test(q);
+      const isMonitor = /monitor|display|screen/.test(q);
+
+      // ── Shared validation: remove duplicate words within a phrase,
+      //    then deduplicate the final array ──────────────────────────────────
+      function dedupeWords(phrase) {
+        const words = phrase.trim().split(/\s+/);
+        const seen = new Set();
+        return words.filter((w) => {
+          if (seen.has(w)) return false;
+          seen.add(w);
+          return true;
+        }).join(' ');
+      }
+      function cleanKeywords(arr) {
+        const seen = new Set();
+        return arr
+          .map(dedupeWords)
+          .filter((p) => {
+            if (!p || seen.has(p)) return false;
+            seen.add(p);
+            return true;
+          });
+      }
+
+      // ── Laptop keywords ──
+      if (isLaptop) {
+        // ── Gaming mode: strict isolation, no coding pool leakage ──────────
+        const isGaming = /gaming|\bfps\b|\bgpu\b|\bgraphics\b/.test(q) || t.match(/gaming|fps|gpu|graphics card/);
+        if (isGaming) {
+          const gamingPool = [
+            'best gaming laptops under 1000',
+            'budget gaming laptops',
+            'gaming laptops with good GPU',
+            'gaming laptops for high FPS',
+            'affordable gaming laptops',
+            'best gaming laptops 2026',
+            'gaming laptops under 500',
+            'gaming laptops with RTX graphics',
+          ];
+          const gamingPriority = [];
+          if (t.match(/budget|affordable|cheap|under/))  gamingPriority.push('budget gaming laptops', 'affordable gaming laptops');
+          if (t.match(/fps|frame rate/))                 gamingPriority.push('gaming laptops for high FPS');
+          if (t.match(/gpu|graphics|rtx|nvidia/))        gamingPriority.push('gaming laptops with good GPU', 'gaming laptops with RTX graphics');
+          const merged = [...new Set([...gamingPriority, ...gamingPool])];
+          return cleanKeywords(merged).slice(0, 5);
+        }
+
+        // ── Coding / developer mode ────────────────────────────────────────
+        // Curated high-intent pool — no weak modifiers (lightweight, comfortable, stylish)
+        // Every phrase must sound like a real Google/Amazon search
+        const pool = [
+          'best laptops for coding',
+          'laptops for programming',
+          'laptops for software development',
+          'budget laptops for coding',
+          'laptops for developers',
+          'laptops for programming students',
+          'best laptops for software engineers',
+          'best laptops for computer science students',
+          'laptops for web development',
+          'best gaming laptops under 1000',
+          'best laptops for video editing',
+          'best laptops for remote work',
+          'laptops for data science',
+        ];
+
+        // Insight-driven priority — most specific match goes first
+        const priority = [];
+        if (t.match(/data science|machine learning|python/))
+          priority.push('laptops for data science', 'best laptops for software engineers');
+        if (t.match(/web dev|frontend|backend|full.?stack/))
+          priority.push('laptops for web development', 'laptops for software development');
+        if (t.match(/software engineer|software dev/))
+          priority.push('best laptops for software engineers', 'laptops for software development');
+        if (t.match(/computer science|cs student/))
+          priority.push('best laptops for computer science students', 'laptops for programming students');
+        if (t.match(/student|college|university/))
+          priority.push('laptops for programming students', 'budget laptops for coding');
+        if (t.match(/developer|coding|programming/))
+          priority.push('best laptops for coding', 'laptops for developers');
+        if (t.match(/budget|affordable|cheap|under/))
+          priority.push('budget laptops for coding');
+        if (t.match(/gaming/))
+          priority.push('best gaming laptops under 1000');
+        if (t.match(/video|edit|creative/))
+          priority.push('best laptops for video editing');
+        if (t.match(/remote|work from home/))
+          priority.push('best laptops for remote work');
+
+        return cleanKeywords([...priority, ...pool]).slice(0, 5);
+      }
+
+      // ── Audio keywords — checked BEFORE phone ──
+      if (isAudio) {
+        // Extract the core product noun: strip modifiers, adjectives, and pluralise consistently
+        const AUDIO_MODS = /^(best|top|good|great|cheap|affordable|premium|new|noise|cancelling|wireless|budget)\s+/i;
+        let noun = q.replace(/\b20\d\d\b/g, '').replace(/\s+/g, ' ').trim();
+        while (AUDIO_MODS.test(noun)) noun = noun.replace(AUDIO_MODS, '').trim();
+        // Normalise to plural form for natural phrasing
+        if (!noun.endsWith('s')) noun = noun + 's';
+        noun = noun || 'headphones';
+
+        const pool = [
+          `best ${noun} 2026`,
+          `best noise cancelling ${noun}`,
+          `wireless ${noun} for work`,
+          `${noun} for gym`,
+          `budget ${noun} under 100`,
+          `${noun} for calls`,
+          `best ${noun} for travel`,
+        ];
+        const priority = [];
+        if (t.match(/noise.cancel|anc/))    priority.push(`best noise cancelling ${noun}`);
+        if (t.match(/wireless|bluetooth/))  priority.push(`wireless ${noun} for work`);
+        if (t.match(/gym|workout|sport/))   priority.push(`${noun} for gym`);
+        if (t.match(/budget|affordable/))   priority.push(`budget ${noun} under 100`);
+        if (t.match(/travel|commut/))       priority.push(`best ${noun} for travel`);
+        return cleanKeywords([...priority, ...pool]).slice(0, 5);
+      }
+
+      // ── Phone keywords ──
+      if (isPhone) {
+        // Strip year numbers then strip ALL leading modifier words iteratively
+        const PHONE_MODS = /^(best|top|good|great|cheap|affordable|premium|new|budget)\s+/i;
+        let noun = q.replace(/\b20\d\d\b/g, '').replace(/\s+/g, ' ').trim();
+        while (PHONE_MODS.test(noun)) noun = noun.replace(PHONE_MODS, '').trim();
+        noun = noun || 'smartphone';
+
+        const pool = [
+          `best ${noun} 2026`,
+          `${noun} under 500`,
+          `best budget ${noun}`,
+          `${noun} for photography`,
+          `${noun} with best battery life`,
+          `${noun} for gaming`,
+          `${noun} for students`,
+        ];
+        const priority = [];
+        if (t.match(/camera|photo|photography/)) priority.push(`${noun} for photography`);
+        if (t.match(/battery|long.lasting/))     priority.push(`${noun} with best battery life`);
+        if (t.match(/gaming|performance/))       priority.push(`${noun} for gaming`);
+        if (t.match(/budget|affordable|cheap/))  priority.push(`best budget ${noun}`, `${noun} under 500`);
+        if (t.match(/student/))                  priority.push(`${noun} for students`);
+        return cleanKeywords([...priority, ...pool]).slice(0, 5);
+      }
+
+      // ── Generic tech fallback ──
+      return cleanKeywords([
+        `best ${q} 2026`,
+        `best budget ${q}`,
+        `${q} for students`,
+        `${q} under 500`,
+        `top rated ${q}`,
+      ]).slice(0, 5);
+    },
+    positioning: (base, insights, competitors) => {
+      const t = (insights + ' ' + competitors.join(' ')).toLowerCase();
+      const q = base.toLowerCase();
+
+      const isLaptop = /laptop|notebook|macbook|chromebook/.test(q);
+      // Audio must be checked before phone to prevent "headphones" routing into phone branch
+      const isAudio  = /headphones?|earbuds?|earphones?/.test(q);
+      const isPhone  = !isAudio && /phone|smartphone|iphone|android/.test(q);
+
+      if (isLaptop) {
+        if (t.match(/developer|coding|programming/)) {
+          if (t.match(/budget|affordable|cheap|under/))
+            return `Budget coding laptop optimised for speed, portability, and developer workflows`;
+          if (t.match(/premium|pro|high.end/))
+            return `Premium developer laptop with strong processing power and long battery life`;
+          return `Developer-focused laptop with strong processing power and lightweight design`;
+        }
+        if (t.match(/student|college|university/))
+          return `Student-friendly laptop focused on performance, battery life, and affordability`;
+        if (t.match(/gaming/))
+          return `Mid-range gaming laptop with high refresh rate and dedicated GPU`;
+        if (t.match(/video|edit|creative/))
+          return `Creative professional laptop optimised for video editing and colour accuracy`;
+        if (t.match(/business|enterprise|work/))
+          return `Business laptop focused on security, reliability, and all-day battery life`;
+        return `Beginner-friendly laptop focused on performance and battery life`;
+      }
+
+      // Audio — checked before phone
+      if (isAudio) {
+        if (t.match(/noise.cancel/))  return `Premium noise-cancelling audio focused on commuters and remote workers`;
+        if (t.match(/gaming/))        return `Gaming audio with low-latency and immersive surround sound`;
+        if (t.match(/sport|gym/))     return `Sport audio focused on secure fit, sweat resistance, and bass performance`;
+        return `Wireless audio focused on comfort, sound quality, and all-day battery life`;
+      }
+
+      // Phone
+      if (isPhone) {
+        if (t.match(/camera|photo/))  return `Camera-first smartphone positioned for photography enthusiasts`;
+        if (t.match(/gaming/))        return `Performance smartphone optimised for gaming and high refresh rate displays`;
+        if (t.match(/budget|cheap/))  return `Budget smartphone with flagship-level features at mid-range pricing`;
+        return `Mid-range smartphone focused on battery life, camera quality, and value`;
+      }
+
+      return `${base.charAt(0).toUpperCase() + base.slice(1)} focused on performance, value, and reliability`;
+    },
+    priceStrategy: (insights) => {
+      const t = insights.toLowerCase();
+      if (t.match(/premium|flagship|pro|high.end/))
+        return 'Price at the premium tier — justify with superior specs, build quality, and brand trust';
+      if (t.match(/budget|affordable|cheap|under \$|under £/))
+        return 'Undercut premium competitors by offering similar specs at a lower price point — highlight performance-to-price ratio';
+      if (t.match(/student|college|university/))
+        return 'Bundle with student discounts, software licences, or extended warranty to increase perceived value';
+      if (t.match(/mid.range|mid range|value/))
+        return 'Position in the mid-tier with a high performance-to-price ratio — target buyers who want flagship features without flagship pricing';
+      return 'Offer a competitive price with a clear spec advantage over similarly priced rivals — lead with benchmark comparisons';
+    },
+    recommendedAction: (topRanked, focusKeywords, insights) => {
+      const t = insights.toLowerCase();
+      const competitor = topRanked.toLowerCase();
+
+      // Competitor-type classification
+      const isApple   = /apple|macbook|iphone|ipad/.test(competitor);
+      const isDell    = /dell|xps/.test(competitor);
+      const isLenovo  = /lenovo|thinkpad/.test(competitor);
+      const isSamsung = /samsung|galaxy/.test(competitor);
+      const isHP      = /\bhp\b|hewlett/.test(competitor);
+
+      // Insight-driven angle
+      const hasDev     = t.match(/developer|coding|programming/);
+      const hasStudent = t.match(/student|college|university/);
+      const hasBudget  = t.match(/budget|affordable|cheap|under/);
+      const hasPerf    = t.match(/performance|speed|processor|ram|ssd/);
+      const hasGaming  = t.match(/gaming/);
+
+      if (isApple) {
+        if (hasDev)     return `Differentiate from MacBook Air by offering better price-to-performance for developers — highlight RAM, SSD speed, and Linux compatibility`;
+        if (hasStudent) return `Target the student segment that can't afford MacBook pricing — offer comparable build quality at 40–50% lower cost`;
+        if (hasBudget)  return `Compete with MacBook Air by positioning as the best value coding laptop under $1000 — lead with spec comparisons`;
+        return `Differentiate from MacBook by focusing on Windows ecosystem advantages — better gaming, more ports, and lower entry price`;
+      }
+
+      if (isDell || isLenovo || isHP) {
+        if (hasDev)    return `Outposition ${topRanked} by targeting developers with Linux-ready builds, better keyboard ergonomics, and competitive RAM configurations`;
+        if (hasGaming) return `Compete with ${topRanked} by offering a better GPU-to-price ratio and higher refresh rate display at the same price point`;
+        return `Differentiate from ${topRanked} by leading with a specific use-case — coding, video editing, or student productivity — rather than generic specs`;
+      }
+
+      if (isSamsung) {
+        if (t.match(/phone|smartphone/)) return `Differentiate from Samsung Galaxy by focusing on camera software, clean OS experience, and faster software updates`;
+        return `Compete with ${topRanked} by offering a tighter software-hardware integration and longer support lifecycle`;
+      }
+
+      // Insight-driven fallback
+      if (hasDev)     return `Differentiate from ${topRanked} by highlighting RAM, SSD speed, and processor performance for coding workflows`;
+      if (hasStudent) return `Target the student segment with budget-friendly ${focusKeywords[0] || 'tech'} — bundle with software and student discounts`;
+      if (hasBudget)  return `Compete with ${topRanked} by offering similar specs at a lower price — lead with benchmark and value comparisons`;
+      if (hasPerf)    return `Outposition ${topRanked} by leading with measurable performance benchmarks — CPU score, boot time, and battery hours`;
+      return `Differentiate from ${topRanked} by targeting a specific segment — students, developers, or creatives — with tailored spec configurations`;
+    },
+  },
+  {
+    name: 'saas',
+    signals: /\bsoftware\b|\bapp\b|\bplatform\b|\btool\b|\bsaas\b|\bdashboard\b|\bcrm\b|\banalytics\b|\bautomation\b/,
+    keywords: (base, insights) => {
+      const t = insights.toLowerCase();
+      const pool = [
+        `best ${base}`,
+        `${base} for small business`,
+        `${base} free trial`,
+        `${base} pricing`,
+        `${base} vs competitors`,
+        `${base} for teams`,
+        `${base} integration`,
+        `affordable ${base}`,
+      ];
+      const priority = [];
+      if (t.match(/free|trial/))       priority.push(`${base} free trial`);
+      if (t.match(/small business/))   priority.push(`${base} for small business`);
+      if (t.match(/team|collaborat/))  priority.push(`${base} for teams`);
+      if (t.match(/integrat/))         priority.push(`${base} integration`);
+      const merged = [...new Set([...priority, ...pool])];
+      return merged.slice(0, 5);
+    },
+    positioning: (base, insights, competitors) => {
+      const t = (insights + ' ' + competitors.join(' ')).toLowerCase();
+      let angle = 'ease of use and fast onboarding';
+      if (t.match(/enterprise|scale/))  angle = 'enterprise scalability and security';
+      else if (t.match(/small|startup/)) angle = 'small teams and startup workflows';
+      else if (t.match(/automat/))       angle = 'workflow automation and time savings';
+      return `${base.charAt(0).toUpperCase() + base.slice(1)} platform focused on ${angle}`;
+    },
+    priceStrategy: (insights) => {
+      const t = insights.toLowerCase();
+      if (t.match(/enterprise/))
+        return 'Annual contracts for enterprise; monthly self-serve for SMBs — offer a 14-day free trial to reduce friction';
+      if (t.match(/free|freemium/))
+        return 'Freemium with usage limits; convert to paid via in-app upgrade prompts at key friction points';
+      return 'Per-seat monthly pricing with an annual discount — offer a free trial to lower acquisition barrier';
+    },
+    recommendedAction: (topRanked, focusKeywords, insights) => {
+      const t = insights.toLowerCase();
+      let angle = 'a simpler onboarding experience and transparent pricing';
+      if (t.match(/integrat/))   angle = 'deeper integrations with tools your users already use';
+      if (t.match(/automat/))    angle = 'automation features that save measurable time per week';
+      return `Differentiate from ${topRanked} by offering ${angle}`;
+    },
+  },
+  {
+    name: 'ecommerce',  // default — physical products, existing logic
+    signals: null,      // matches everything that didn't match above
+    keywords: null,     // uses buildKeywordsProduct below
+    positioning: null,
+    priceStrategy: null,
+    recommendedAction: null,
+  },
+];
+
+function detectDomain(query) {
+  const q = query.toLowerCase();
+  for (const profile of DOMAIN_PROFILES) {
+    if (profile.signals && profile.signals.test(q)) return profile;
+  }
+  return DOMAIN_PROFILES.find((p) => p.name === 'ecommerce');
+}
+
+// ─── Final Strategy ───────────────────────────────────────────────────────────
+const KNOWN_MODIFIERS = new Set([
+  'best', 'top', 'good', 'great', 'cheap', 'affordable', 'premium', 'lightweight',
+  'comfortable', 'durable', 'top rated', 'highly rated', 'popular', 'new',
+]);
+
+// All known audience/intent suffixes — strip these from the query too
+// NOTE: activity patterns like "for running", "for yoga" are intentionally excluded —
+// they are handled by the reorder step in normalizeQuery, not stripped as audiences.
+const KNOWN_AUDIENCES = [
+  'for beginners', 'for women', 'for men', 'for kids', 'for children',
+  'for flat feet', 'for wide feet', 'for trail running', 'for long distance',
+  'for everyday use',
+];
+
+// Words that signal marketing/campaign content — never use in SEO keywords
+const CAMPAIGN_SIGNALS = [
+  /\bstory\b/, /\bjourney\b/, /\bemotional\b/, /\blifestyle\b/, /\bcommunity\b/,
+  /\bengagement\b/, /\bpersonali[sz]/, /\bcreative\b/, /\bvibe\b/, /\bbuzz\b/,
+  /\brun with\b/, /\bfeel the\b/, /\byour first\b/, /\bshoppers love\b/,
+  /\bword.of.mouth\b/, /\bvisual\b/, /\bstorytell/,
+];
+
+function hasCampaignLanguage(text) {
+  return CAMPAIGN_SIGNALS.some((re) => re.test(text.toLowerCase()));
+}
+
+// Normalize the raw query into a clean base product term.
+// Strips leading modifiers and trailing audience phrases, then reorders
+// "[product] for [activity]" → "[activity] [product]" so base never contains "for".
+// "best running shoes for beginners" → { base: "running shoes", audience: "for beginners" }
+// "shoes for running"                → { base: "running shoes", audience: null }
+// "mat for yoga"                     → { base: "yoga mat",      audience: null }
+// "lightweight shoes"                → { base: "shoes",         audience: null }
+function normalizeQuery(query) {
+  let q = query.toLowerCase().trim();
+
+  // Step 1: strip known audience suffixes (longest match wins)
+  let detectedAudience = null;
+  for (const aud of KNOWN_AUDIENCES.slice().sort((a, b) => b.length - a.length)) {
+    if (q.endsWith(aud)) {
+      detectedAudience = aud;
+      q = q.slice(0, q.length - aud.length).trim();
+      break;
+    }
+  }
+
+  // Step 2: strip leading modifier words
+  const words = q.split(' ');
+  while (words.length > 1 && KNOWN_MODIFIERS.has(words[0])) {
+    words.shift();
+  }
+  q = words.join(' ').trim();
+
+  // Step 3: reorder "[product] for [activity]" → "[activity] [product]"
+  // Handles two sub-cases:
+  //   a) Single-word activity:  "shoes for running"          → "running shoes"
+  //   b) Activity + audience:   "shoes for running beginners" → base="running shoes", audience="for beginners"
+  const forMatch = q.match(/^(.+?)\s+for\s+(\w+)((?:\s+\w+)*)$/);
+  if (forMatch) {
+    const product   = forMatch[1].trim();                    // "shoes"
+    const activity  = forMatch[2].trim();                    // "running"
+    const remainder = forMatch[3].trim();                    // "beginners" or ""
+
+    q = `${activity} ${product}`;                            // → "running shoes"
+
+    // If there's a leftover word after the activity, treat it as an audience suffix
+    if (remainder && !detectedAudience) {
+      detectedAudience = `for ${remainder}`;                 // → "for beginners"
+    }
+  }
+
+  return { base: q, audience: detectedAudience };
+}
+
+// Validate a constructed keyword phrase:
+// - at least 2 words
+// - no duplicate words
+// - no more than one "for"
+// - max 6 words total
+function isCleanKeyword(phrase) {
+  if (!phrase) return false;
+  const words = phrase.trim().split(/\s+/);
+  if (words.length < 2 || words.length > 6) return false;
+  if (new Set(words).size < words.length) return false;           // duplicate words
+  if ((phrase.match(/\bfor\b/g) || []).length > 1) return false; // multiple "for"
+  return true;
+}
+
+// Build SEO keywords — routes to domain-specific logic or falls back to product templates.
+function buildKeywords(query, groqInsights, gptInsights) {
+  const domain = detectDomain(query);
+  const combinedInsights = groqInsights + ' ' + gptInsights;
+
+  // Non-ecommerce domains use their own curated keyword pools
+  if (domain.keywords) {
+    return domain.keywords(query.toLowerCase().trim(), combinedInsights);
+  }
+
+  // ── Ecommerce / physical product path ────────────────────────────────────
+  const { base, audience: queryAudience } = normalizeQuery(query);
+  const insights = combinedInsights.toLowerCase();
+  const seen = new Set();
+  const results = [];
+
+  function add(phrase) {
+    const p = phrase.trim().replace(/\s+/g, ' ');
+    if (!p || seen.has(p)) return;
+    if (!isCleanKeyword(p)) return;
+    seen.add(p);
+    results.push(p);
+  }
+
+  add(`best ${base}`);
+  if (insights.match(/lightweight|light weight/))          add(`lightweight ${base}`);
+  if (insights.match(/affordable|budget|cheap|value/))     add(`affordable ${base}`);
+  if (insights.match(/comfortable|comfort|cushion/))       add(`comfortable ${base}`);
+  if (insights.match(/durable|durability|long.lasting/))   add(`durable ${base}`);
+  if (queryAudience)                                        add(`${base} ${queryAudience}`);
+  if (insights.match(/beginner|starter|first.time/))       add(`${base} for beginners`);
+  if (insights.match(/\bwomen\b|\bfemale\b/))              add(`${base} for women`);
+  if (insights.match(/\bmen\b|\bmale\b/))                  add(`${base} for men`);
+  if (insights.match(/flat feet|flat.foot/))               add(`${base} for flat feet`);
+  if (insights.match(/wide feet|wide.foot|wide toe/))      add(`${base} for wide feet`);
+  if (insights.match(/trail|outdoor|terrain/))             add(`${base} for trail running`);
+  if (insights.match(/long distance|marathon|endurance/))  add(`${base} for long distance`);
+
+  const fallbacks = [
+    `best ${base}`, `lightweight ${base}`, `affordable ${base}`,
+    `comfortable ${base}`, `${base} for beginners`, `${base} for women`,
+    `${base} for flat feet`, `${base} for everyday use`, `top rated ${base}`,
+  ];
+  for (const f of fallbacks) {
+    if (results.length >= 5) break;
+    add(f);
+  }
+  return results.slice(0, 5);
+}
+
+function detectPositioning(query, groqInsights, gptInsights, competitors, domain) {
+  // Non-ecommerce domains use their own positioning logic
+  if (domain.positioning) {
+    return domain.positioning(query, groqInsights + ' ' + gptInsights, competitors);
+  }
+
+  // ── Ecommerce path ────────────────────────────────────────────────────────
+  const { base } = normalizeQuery(query);
+  const text = (groqInsights + ' ' + gptInsights + ' ' + competitors.join(' ')).toLowerCase();
+
+  let tier = 'Mid-range';
+  if (text.match(/premium|luxury|high.end|flagship/))           tier = 'Premium';
+  else if (text.match(/budget|affordable|cheap|value|entry.level/)) tier = 'Affordable';
+
+  let audience = 'everyday users';
+  if (text.match(/beginner|starter|first.time/))                audience = 'beginners';
+  else if (text.match(/professional|expert|advanced|serious/))  audience = 'serious athletes';
+  else if (text.match(/\bwomen\b|\bfemale\b/))                  audience = 'women';
+  else if (text.match(/\bmen\b|\bmale\b/))                      audience = 'men';
+  else if (text.match(/kids|children|youth/))                   audience = 'kids';
+
+  let benefit = 'reliable performance';
+  if (text.match(/cushion|comfort|soft/))                       benefit = 'comfort and cushioning';
+  else if (text.match(/lightweight|light weight|minimal/))      benefit = 'lightweight build';
+  else if (text.match(/durable|durability|long.lasting/))       benefit = 'long-term durability';
+  else if (text.match(/support|stability|motion control/))      benefit = 'arch support and stability';
+  else if (text.match(/speed|fast|responsive/))                 benefit = 'speed and responsiveness';
+  else if (text.match(/trail|outdoor|terrain/))                 benefit = 'trail and outdoor performance';
+
+  const baseWords = new Set(base.split(' '));
+  const cleanAudience = audience.split(' ').filter((w) => !baseWords.has(w)).join(' ') || audience;
+  return `${tier} ${base} for ${cleanAudience} focused on ${benefit}`;
+}
+
+function detectPriceStrategy(groqInsights, gptInsights, competitors, domain) {
+  // Non-ecommerce domains use their own pricing logic
+  if (domain.priceStrategy) {
+    return domain.priceStrategy(groqInsights + ' ' + gptInsights);
+  }
+
+  // ── Ecommerce path ────────────────────────────────────────────────────────
+  const text = (groqInsights + ' ' + gptInsights + ' ' + competitors.join(' ')).toLowerCase();
+  if (text.match(/premium|luxury|high.end/))
+    return 'Price 10–20% above average. Justify with quality images, specs, and 4.5★+ reviews';
+  if (text.match(/budget|affordable|value|cheap/))
+    return 'Undercut top 3 rivals by $5–$10. Add a bundle (insoles, bag) to lift perceived value';
+  if (text.match(/subscription|recurring|membership/))
+    return 'Launch a subscription tier to drive repeat purchases and cut acquisition cost';
+  return 'Match the #1 competitor price. Win on listing quality — images, reviews, bullet points';
+}
+
+function pickRecommendedAction(primaryModel, allModels, focusKeywords, domain, groqInsights) {
+  const primary = allModels[primaryModel];
+  const topRanked = primary.ranking?.[0]?.name || 'the top competitor';
+
+  // Non-ecommerce domains use their own action framing
+  if (domain.recommendedAction) {
+    return domain.recommendedAction(topRanked, focusKeywords, groqInsights);
+  }
+
+  // ── Ecommerce path ────────────────────────────────────────────────────────
+  const mainKeyword = focusKeywords[0] || 'top search keywords';
+  return `Outrank "${topRanked}" by targeting "${mainKeyword}" and optimizing listing quality`;
+}
+
+// Trailing words that make a phrase feel incomplete when they appear at the end
+const TRAILING_CONNECTORS = new Set([
+  'for', 'and', 'with', 'in', 'on', 'at', 'to', 'of', 'or',
+  'by', 'the', 'a', 'an', 'your', 'its', 'as', 'is', 'are',
+]);
+
+function trimToCompletePhrase(text, maxWords = 10) {
+  const words = text.trim().split(/\s+/);
+
+  // Take up to maxWords
+  let trimmed = words.slice(0, maxWords);
+
+  // Walk back from the end until the last word is not a trailing connector
+  while (trimmed.length > 1 && TRAILING_CONNECTORS.has(trimmed[trimmed.length - 1].toLowerCase())) {
+    trimmed.pop();
+  }
+
+  // Strip trailing punctuation except closing quotes
+  return trimmed.join(' ').replace(/[,;:.]+$/, '').trim();
+}
+
+// Words that are too generic to be a useful quick win
+const VAGUE_VERBS = /^(optimize|improve|enhance|update|leverage|utilize|ensure|consider|focus|work on)/i;
+
+function pickQuickWin(query, groqSuggestions, gptSuggestions, domain, combinedInsights) {
+  const t = combinedInsights.toLowerCase();
+
+  // ── Domain-specific quick wins ─────────────────────────────────────────────
+
+  if (domain.name === 'tech_products') {
+    const q = query.toLowerCase();
+    const isLaptop = /laptop|notebook|macbook|chromebook/.test(q);
+    const isAudio  = /headphones?|earbuds?|earphones?/.test(q);
+    const isPhone  = !isAudio && /phone|smartphone|iphone|android/.test(q);
+
+    if (isLaptop) {
+      if (t.match(/gaming/))
+        return 'Add GPU benchmark and FPS comparison chart in product images';
+      if (t.match(/\bram\b|\bssd\b|\bcpu\b|\bprocessor\b|\bspec/))
+        return 'Add RAM/SSD/CPU comparison chart in product images';
+      if (t.match(/battery|battery life/))
+        return 'Highlight battery life with real usage screenshot overlay';
+      if (t.match(/student|college|university/))
+        return 'Add student discount badge and bundle offer on listing';
+      if (t.match(/portable|portab|thin|light/))
+        return 'Show weight and dimensions vs competitors in hero image';
+      if (t.match(/developer|coding|programming|terminal|vs code/))
+        return 'Show coding setup with VS Code and terminal in hero image';
+      // Default laptop quick win
+      return 'Add RAM/SSD/CPU comparison chart in product images';
+    }
+
+    if (isPhone) {
+      if (t.match(/camera|photo/))   return 'Add side-by-side camera sample shots in product gallery';
+      if (t.match(/battery/))        return 'Show screen-on time benchmark vs top competitor';
+      if (t.match(/gaming/))         return 'Add FPS benchmark screenshot in product images';
+      return 'Add spec comparison table vs top competitor in listing';
+    }
+
+    if (isAudio) {
+      // Check query too — user may have typed "noise cancelling headphones"
+      const qAudio = query.toLowerCase();
+      if (t.match(/noise.cancel/) || qAudio.match(/noise.cancel/))
+        return 'Add noise cancellation dB rating vs Sony and Bose';
+      if (t.match(/battery/))        return 'Show battery life comparison chart in product images';
+      if (t.match(/gaming/))         return 'Add latency benchmark vs top gaming headset';
+      return 'Add frequency response chart and real-world use photo';
+    }
+
+    // Generic tech fallback
+    return 'Add spec comparison chart vs top competitor in hero image';
+  }
+
+  if (domain.name === 'ai_tools') {
+    if (t.match(/developer|api|sdk/))   return 'Add live API demo or code snippet to landing page';
+    if (t.match(/content|writ|copy/))   return 'Add before/after content sample on homepage hero';
+    if (t.match(/automat|workflow/))    return 'Show time-saved metric with a real workflow example';
+    if (t.match(/free|trial/))          return 'Make free trial CTA the first visible element above fold';
+    return 'Add a 60-second product demo video to the landing page';
+  }
+
+  if (domain.name === 'jobs') {
+    if (t.match(/remote/))              return 'Add remote job filter as the first option on homepage';
+    if (t.match(/fresher|entry.level/)) return 'Create a dedicated fresher jobs landing page';
+    if (t.match(/alert|notification/))  return 'Add one-click job alert signup on search results page';
+    return 'Add job count by category on homepage to signal volume';
+  }
+
+  if (domain.name === 'saas') {
+    if (t.match(/free|trial/))          return 'Move free trial CTA above the fold on the pricing page';
+    if (t.match(/integrat/))            return 'Add integration logos to homepage to signal compatibility';
+    if (t.match(/team|collaborat/))     return 'Add team collaboration screenshot to hero section';
+    return 'Add a customer logo strip above the fold for social proof';
+  }
+
+  // ── Generic SEO path (ecommerce + unknown domains) ─────────────────────────
+  const seoSuggestions = [...groqSuggestions, ...gptSuggestions];
+  const { base } = normalizeQuery(query);
+
+  const actionable = seoSuggestions
+    .filter((s) => /^(add|use|target|include|highlight|insert|rewrite|place|show|create)/i.test(s))
+    .filter((s) => !VAGUE_VERBS.test(s))
+    .filter((s) => !hasCampaignLanguage(s))
+    .filter((s) => s.split(' ').length >= 4)
+    .sort((a, b) => a.length - b.length);
+
+  const best = actionable[0];
+  if (best) return trimToCompletePhrase(best, 12);
+
+  return `Add "best ${base}" to your product title`;
+}
+
+export function generateFinalStrategy(query, groq, gpt, gemini, comparison) {
+  const allModels = { groq, gpt, gemini };
+  const primaryModel = comparison.bestModel;
+  const domain = detectDomain(query);
+
+  // SEO data sources: Groq + GPT only
+  const groqInsights      = groq.insights;
+  const gptInsights       = gpt.insights;
+  const groqSuggestions   = groq.suggestions;
+  const gptSuggestions    = gpt.suggestions;
+  const mergedCompetitors = [...new Set([...groq.competitors, ...gpt.competitors, ...gemini.competitors])];
+
+  const focusKeywords = buildKeywords(query, groqInsights, gptInsights);
+
+  return {
+    recommendedAction : pickRecommendedAction(primaryModel, allModels, focusKeywords, domain, groqInsights),
+    focusKeywords,
+    positioning       : detectPositioning(query, groqInsights, gptInsights, mergedCompetitors, domain),
+    priceStrategy     : detectPriceStrategy(groqInsights, gptInsights, mergedCompetitors, domain),
+    quickWin          : pickQuickWin(query, groqSuggestions, gptSuggestions, domain, groqInsights + ' ' + gptInsights),
+  };
+}
+
+// ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
+
+export async function analyzeWithMultipleModels(query) {
+  const [groqResult, gptResult, geminiResult] = await Promise.all([
+    analyzeProduct(query),
+    analyzeProductGPT(query),
+    analyzeProductGemini(query),
+  ]);
+
+  const comparison = compareModels(groqResult, gptResult, geminiResult);
+  const finalStrategy = generateFinalStrategy(query, groqResult, gptResult, geminiResult, comparison);
+
+  return {
+    groq: groqResult,
+    gpt: gptResult,
+    gemini: geminiResult,
+    comparison,
+    finalStrategy,
+  };
+}
