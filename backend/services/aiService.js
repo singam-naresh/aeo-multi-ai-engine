@@ -1896,9 +1896,7 @@ function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, 
   }
 
   // ── Platform quick win: FORCE correct value, no product-listing language ─
-  if (domain === 'platform') {
-    quickWin = 'Add a fresher-only job filter and simplify application flow.';
-  }
+  // (will be overwritten again at the very end — kept here for intermediate safety)
 
   // ── Keywords: use job-specific pool for job queries ───────────────────
   let focusKeywords = strategy.focusKeywords;
@@ -1916,32 +1914,21 @@ function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, 
     focusKeywords = filtered.length >= 3 ? filtered : focusKeywords;
   }
 
-  // ── Positioning: FORCE correct value for platform domain ─────────────
-  if (domain === 'platform') {
-    positioning = 'Job platform designed for fast job discovery, fresher-focused filtering, and easy applications.';
-  }
-
-  // ── Final guard: catch any remaining leakage before returning ─────────
-  const POSITION_LEAK = /\bperformance\b|\bdevice\b|\bproduct\b/i;
-  const QW_LEAK       = /\blisting\b|\bimage\b|\bproduct\b/i;
-  if (domain === 'platform') {
-    if (POSITION_LEAK.test(positioning)) {
-      positioning = 'Job platform designed for fast job discovery, fresher-focused filtering, and easy applications.';
-    }
-    if (QW_LEAK.test(quickWin)) {
-      quickWin = 'Add a fresher-only job filter and simplify application flow.';
-    }
-  }
-
   // ── Final validation: if still generic after all fixes, use safe fallback ──
   if (isGenericStrategy(recommendedAction)) {
     recommendedAction = fallback.recommendedAction;
     focusKeywords     = fallback.focusKeywords;
-    positioning       = fallback.positioning;
-    quickWin          = fallback.quickWin;
   }
 
   console.log('DOMAIN ENFORCE:', domain, '/', subDomain, '| specific:', isSpecificStrategy(recommendedAction));
+
+  // ── FINAL OVERRIDE — runs last, no conditions, no regex ──────────────
+  // Platform positioning and quickWin are always forced here, overwriting
+  // anything set above. This is the single source of truth for platform output.
+  if (domain === 'platform') {
+    positioning = 'Job platform designed for fast job discovery, fresher-focused filtering, and easy applications.';
+    quickWin    = 'Add a fresher-only job filter and simplify application flow.';
+  }
 
   return {
     ...strategy,
