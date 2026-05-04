@@ -1581,8 +1581,9 @@ function generateQuickWin(primaryIntent) {
 
 // ─── Adaptive + Data-Augmented Layer ─────────────────────────────────────────
 
-// In-memory query cache — avoids redundant LLM calls for repeated queries
-const queryCache = new Map();
+// In-memory query cache with TTL — avoids redundant LLM calls for repeated queries
+const queryCache = new Map(); // key → { result, timestamp }
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 // 1. Lightweight intent signals from query heuristics (no scraping, no fake data)
 function getLightweightSignals(normalizedQuery) {
@@ -1740,14 +1741,132 @@ function generateStrategyCandidates(primaryIntent, topProduct) {
   return candidates.reduce((best, c) => scoreStrategy(c) >= scoreStrategy(best) ? c : best, candidates[0]);
 }
 
+// ─── Grounding + Evidence + Confidence Layer ─────────────────────────────────
+
+// Feature signal vocabulary used for grounding and evidence
+const GROUND_SIGNAL_VOCAB = [
+  'battery', 'fps', 'camera', 'ram', 'ssd', 'gpu', 'cpu', 'processor',
+  'display', 'screen', 'performance', 'speed', 'price', 'value', 'design',
+  'build', 'weight', 'port', 'connectivity', 'software', 'support', 'trial',
+  'integration', 'workflow', 'automation', 'security', 'scalability',
+  'coding', 'programming', 'developer', 'gaming', 'photography', 'student',
+];
+
+// 1. Extract ground signals from AI insights (no network call — fast, honest)
+//    Counts how many times each signal word appears across all model insights
+async function getGroundSignals(query, modelInsights) {
+  const combined = modelInsights.join(' ').toLowerCase();
+  const counts = {};
+
+  for (const term of GROUND_SIGNAL_VOCAB) {
+    const matches = combined.match(new RegExp(`\\b${term}\\b`, 'gi'));
+    if (matches && matches.length > 0) counts[term] = matches.length;
+  }
+
+  // Sort by frequency, return top 5 signal words
+  const topSignals = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([term]) => term);
+
+  return {
+    topSignals,
+    notes: topSignals.length > 0
+      ? `Recurring themes across AI analyses: ${topSignals.join(', ')}`
+      : 'No strong recurring signals detected',
+  };
+}
+
+// 2. Build a 1-sentence evidence statement grounded in signals or insights
+function buildEvidence(insights, groundSignals, primaryIntent) {
+  const { topSignals } = groundSignals;
+
+  // Prefer ground signals when available — they're derived from actual AI output
+  if (topSignals.length >= 2) {
+    const top2 = topSignals.slice(0, 2).join(' and ');
+    const intentPhrases = {
+      'gaming performance':          `Top analyses consistently highlight ${top2} as the primary ranking factors for gaming intent.`,
+      'camera quality':              `Camera-related signals like ${top2} are repeatedly emphasized across all model outputs.`,
+      'performance for development': `Developer-focused signals — ${top2} — dominate the analysis, confirming strong coding intent.`,
+      'ai productivity':             `AI tool analyses converge on ${top2} as the key differentiators in this category.`,
+      'battery life':                `${top2.charAt(0).toUpperCase() + top2.slice(1)} are the most cited factors across all model insights.`,
+      'student value':               `Analyses emphasize ${top2} as the core decision drivers for the student segment.`,
+      'budget':                      `Price-related signals (${top2}) appear consistently, confirming strong budget intent.`,
+      'professional use':            `Professional-grade signals — ${top2} — are consistently highlighted across model outputs.`,
+      'general performance':         `Analyses converge on ${top2} as the primary factors driving rankings in this category.`,
+    };
+    return intentPhrases[primaryIntent] || intentPhrases['general performance'];
+  }
+
+  // Fallback: derive from the best insight sentence
+  const bestInsight = insights
+    .filter((s) => s && s.length > 20)
+    .sort((a, b) => b.length - a.length)[0] || '';
+
+  if (bestInsight) {
+    // Take the first sentence only
+    const firstSentence = bestInsight.split(/[.!?]/)[0].trim();
+    return firstSentence.length > 15 ? firstSentence + '.' : 'Strategy is grounded in multi-model AI analysis of this category.';
+  }
+
+  return 'Strategy is grounded in multi-model AI analysis of this category.';
+}
+
+// 3. Keyword quality score (0–4)
+function keywordQualityScore(keywords, normalizedQuery) {
+  if (!keywords || keywords.length === 0) return 0;
+  let score = 0;
+
+  const allValidLength = keywords.every((k) => {
+    const w = k.split(' ').length;
+    return w >= 2 && w <= 5;
+  });
+  if (allValidLength) score += 1;
+
+  const coreTerms = normalizedQuery.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  const hasProductTerm = keywords.some((k) => coreTerms.some((t) => k.includes(t)));
+  if (hasProductTerm) score += 1;
+
+  const unique = new Set(keywords);
+  if (unique.size === keywords.length) score += 1;
+
+  // Matches intent — at least one keyword contains a meaningful intent word
+  const intentWords = /gaming|camera|coding|programming|budget|student|battery|developer|software|laptop|phone/i;
+  if (keywords.some((k) => intentWords.test(k))) score += 1;
+
+  return score;
+}
+
+// 4. Compute confidence score (0.50–0.90)
+function computeConfidence({ hasGroundSignals, kwQuality, strategyScore }) {
+  let score = 0.60;
+  if (hasGroundSignals)   score += 0.15;
+  if (kwQuality >= 3)     score += 0.15;
+  if (strategyScore >= 6) score += 0.10;
+  return Math.min(0.90, Math.max(0.50, parseFloat(score.toFixed(2))));
+}
+
+// 5. Strategy guardrail — reject generic-only strategies, pick next-best or use fallback
+function guardStrategy(candidates, primaryIntent) {
+  const GENERIC_ONLY = /^(optimize|improve|enhance|leverage|ensure|consider|focus on)\b/i;
+
+  for (const candidate of candidates) {
+    if (!GENERIC_ONLY.test(candidate.trim())) return candidate;
+  }
+
+  // All candidates failed — use safe fallback
+  return `Compete by emphasizing the core ${primaryIntent} advantage and clear product benefits over top competitors.`;
+}
+
 // ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
 
 export async function analyzeWithMultipleModels(query) {
-  // ── Cache check — return immediately for repeated queries ─────────────
+  // ── Cache check — return immediately for fresh cached results ────────────
   const cacheKey = query.toLowerCase().trim();
-  if (queryCache.has(cacheKey)) {
+  const cached = queryCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
     console.log('CACHE HIT:', cacheKey);
-    return queryCache.get(cacheKey);
+    return cached.result;
   }
 
   // ── Step 1: Normalize the raw query ──────────────────────────────────────
@@ -1787,12 +1906,11 @@ export async function analyzeWithMultipleModels(query) {
   if (dynamicKw && dynamicKw.length >= 3) {
     finalKeywords = dynamicKw;
   } else {
-    // Fallback: static intent pool → validate → normalize
     const productNoun = normalizedQuery
       .replace(/\b(best|budget|top|cheap|affordable|premium|gaming|camera|coding|under\s+\d+)\b/gi, '')
       .replace(/\s{2,}/g, ' ').trim() || normalizedQuery.split(' ').slice(-1)[0];
-    const intentKw    = generateIntentKeywords(primaryIntent, productNoun, priceRange);
-    const validatedKw = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
+    const intentKw     = generateIntentKeywords(primaryIntent, productNoun, priceRange);
+    const validatedKw  = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
     const normalizedKw = normalizeKeywords(
       validatedKw.length >= 3 ? validatedKw : strategyRaw.focusKeywords,
       normalizedQuery, enhancedDomain,
@@ -1800,11 +1918,86 @@ export async function analyzeWithMultipleModels(query) {
     const poolKw = removeKeywordRedundancy(intentKw);
     finalKeywords = poolKw.length >= 3 ? poolKw : normalizedKw;
   }
-  console.log('FINAL KEYWORDS:', finalKeywords);
 
-  // ── Strategy: multi-candidate scoring ──────────────────────────────────
-  const bestAction = generateStrategyCandidates(primaryIntent, topProduct);
-  const refinedAction = refineWithSignals(repairText(bestAction), signals);
+  // ── Keyword quality check — regenerate once if weak ──────────────────
+  let kwQuality = keywordQualityScore(finalKeywords, normalizedQuery);
+  if (kwQuality < 2) {
+    const regenKw = await generateDynamicKeywords(normalizedQuery, primaryIntent, secondaryIntent);
+    if (regenKw && regenKw.length >= 3) {
+      finalKeywords = regenKw;
+      kwQuality = keywordQualityScore(finalKeywords, normalizedQuery);
+    }
+  }
+  console.log('FINAL KEYWORDS:', finalKeywords, '| KW QUALITY:', kwQuality);
+
+  // ── Strategy: multi-candidate scoring with guardrail ─────────────────
+  const allCandidates = (() => {
+    const p = topProduct;
+    const map = {
+      'gaming performance': [
+        `Focus on raw gaming performance — highlight FPS stability, cooling system, and battery endurance better than ${p}`,
+        `Beat ${p} on the spec sheet — lead with GPU benchmark scores and thermal performance in every listing image`,
+        `Own the budget gaming segment — show that consistent FPS at this price point beats ${p} in real gameplay`,
+      ],
+      'camera quality': [
+        `Win on camera clarity — emphasize low-light performance and real photo samples that outperform ${p}`,
+        `Make the camera the hero — side-by-side shots against ${p} in every product image and listing`,
+        `Target photography enthusiasts who feel ${p} overcharges — deliver comparable image quality at a lower price`,
+      ],
+      'performance for development': [
+        `Position as a developer-first machine — better keyboard, RAM options, and Linux compatibility than ${p}`,
+        `Win developers who are tired of ${p}'s limitations — highlight open-source support, port selection, and upgrade paths`,
+        `Target CS students and junior devs who need power without the MacBook price — make the spec comparison obvious`,
+      ],
+      'ai productivity': [
+        `Differentiate from ${p} by targeting a specific niche — developers, creators, or marketers — with purpose-built AI workflows`,
+        `Compete with ${p} on speed and simplicity — show output quality side-by-side and let the results speak`,
+        `Win users frustrated with ${p}'s pricing — offer a free tier that delivers comparable value at zero cost`,
+      ],
+      'battery life': [
+        `Lead with endurance — show real-world battery benchmarks and all-day usage scenarios that outlast ${p}`,
+        `Make battery life the headline — a single charge comparison chart against ${p} is worth more than any spec sheet`,
+        `Target road warriors who've been let down by ${p}'s battery claims — use real screen-on time data`,
+      ],
+      'student value': [
+        `Own the student segment — bundle software, offer education pricing, and highlight portability advantages over ${p}`,
+        `Beat ${p} on total cost of ownership for students — include software bundles and warranty in the price comparison`,
+        `Target first-year students who can't justify ${p}'s price — show what they get for less`,
+      ],
+      'budget': [
+        `Compete on value — match ${p}'s core specs at a lower price and make the price-to-performance gap impossible to ignore`,
+        `Win price-sensitive buyers by being transparent — publish a direct spec comparison vs ${p} at the same price`,
+        `Target buyers who've been priced out by ${p} — show that budget doesn't mean compromise on the features they care about`,
+      ],
+      'professional use': [
+        `Target professionals who need reliability — highlight security features, build quality, and support options vs ${p}`,
+        `Win enterprise buyers frustrated with ${p}'s support — lead with SLA, security certifications, and IT management tools`,
+        `Position as the professional alternative to ${p} — same reliability, better value, stronger support`,
+      ],
+      'general performance': [
+        `Outperform ${p} where it matters most — identify its weakest reviewed feature and make that your headline strength`,
+        `Find the gap ${p} leaves open — read its 1-star reviews and build your positioning around solving those exact complaints`,
+        `Don't compete with ${p} on everything — pick one dimension where you clearly win and own that story completely`,
+      ],
+    };
+    return map[primaryIntent] || map['general performance'];
+  })();
+
+  const guardedAction = guardStrategy(allCandidates, primaryIntent);
+  const strategyScore = scoreStrategy(guardedAction);
+  const refinedAction = refineWithSignals(repairText(guardedAction), signals);
+
+  // ── Step 5: Grounding + Evidence + Confidence ─────────────────────────
+  const allInsights   = [groqResult.insights, gptResult.insights, geminiResult.insights].filter(Boolean);
+  const groundSignals = await getGroundSignals(normalizedQuery, allInsights);
+  const evidence      = buildEvidence(allInsights, groundSignals, primaryIntent);
+  const confidence    = computeConfidence({
+    hasGroundSignals: groundSignals.topSignals.length >= 2,
+    kwQuality,
+    strategyScore,
+  });
+
+  console.log('GROUND SIGNALS:', groundSignals.topSignals, '| CONFIDENCE:', confidence);
 
   const finalStrategy = {
     ...strategyRaw,
@@ -1813,9 +2006,13 @@ export async function analyzeWithMultipleModels(query) {
     positioning:       repairText(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
     priceStrategy:     repairText(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
     quickWin:          generateQuickWin(primaryIntent),
+    // Additive fields — frontend ignores unknown fields gracefully
+    evidence,
+    confidence,
+    groundSignals:     groundSignals.topSignals,
   };
 
-  // ── Step 5: Repair model insights ────────────────────────────────────────
+  // ── Step 6: Repair model insights ────────────────────────────────────────
   const repairModel = (m) => ({
     ...m,
     insights:    repairText(m.insights),
@@ -1830,11 +2027,11 @@ export async function analyzeWithMultipleModels(query) {
     finalStrategy,
   };
 
-  // Cache result — evict oldest entry if cache grows beyond 100 items
+  // Cache with TTL timestamp — evict oldest if over 100 entries
   if (queryCache.size >= 100) {
     queryCache.delete(queryCache.keys().next().value);
   }
-  queryCache.set(cacheKey, result);
+  queryCache.set(cacheKey, { result, timestamp: Date.now() });
 
   return result;
 }
