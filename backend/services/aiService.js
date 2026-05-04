@@ -2396,12 +2396,23 @@ export async function analyzeWithMultipleModels(query) {
     suggestions: m.suggestions.map(sanitizeOutput),
   });
 
+  // ── FINAL OVERRIDE — job/fresher queries always get clean platform output ──
+  const q = normalizedQuery.toLowerCase();
+  const isJobQuery = q.includes('job') || q.includes('fresher') ||
+                     q.includes('career') || q.includes('resume');
+
+  const strategy = finalStrategy || {};
+  if (isJobQuery) {
+    strategy.positioning = 'Job platform focused on fast job discovery, fresher-friendly filtering, and quick applications.';
+    strategy.quickWin    = 'Add fresher-only filter and enable 1-click apply.';
+  }
+
   const result = {
     groq:   repairModel(groqResult),
     gpt:    repairModel(gptResult),
     gemini: repairModel(geminiResult),
     comparison,
-    finalStrategy,
+    finalStrategy: strategy,
   };
 
   // Cache with TTL timestamp — evict oldest if over 100 entries
