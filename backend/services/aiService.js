@@ -1895,12 +1895,9 @@ function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, 
     recommendedAction = buildSpecificStrategy(subDomain, topProduct);
   }
 
-  // ── Platform quick win: reject product-listing language ───────────────
+  // ── Platform quick win: FORCE correct value, no product-listing language ─
   if (domain === 'platform') {
-    const PLATFORM_QW_BLOCKED = /product listing|image optimization|bullet point|spec badge|hero image|product image|listing image|product title/i;
-    if (PLATFORM_QW_BLOCKED.test(quickWin)) {
-      quickWin = fallback.quickWin;
-    }
+    quickWin = 'Add a fresher-only job filter and simplify application flow.';
   }
 
   // ── Keywords: use job-specific pool for job queries ───────────────────
@@ -1910,7 +1907,6 @@ function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, 
   } else if (domain === 'platform') {
     const PRODUCT_KW_RE = /\b(laptop|phone|shoes|device|gadget|headphone|camera|gpu|ssd|ram|processor)\b/i;
     const filtered = focusKeywords.filter((kw) => !PRODUCT_KW_RE.test(kw));
-    // Also reject generic platform keywords
     const GENERIC_KW_RE = /^(job search platform|buying guide|best value product|top platform|leading platform)/i;
     const cleaned = filtered.filter((kw) => !GENERIC_KW_RE.test(kw));
     focusKeywords = cleaned.length >= 3 ? cleaned : fallback.focusKeywords;
@@ -1920,12 +1916,21 @@ function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, 
     focusKeywords = filtered.length >= 3 ? filtered : focusKeywords;
   }
 
-  // ── Positioning: fix platform-domain leakage ─────────────────────────
-  const PLATFORM_POSITION_BLOCKED = /\bdevice\b|\bproduct\b|\bperformance-first\b/i;
-  if (domain === 'platform' && PLATFORM_POSITION_BLOCKED.test(positioning)) {
-    positioning = subDomain === 'jobs'
-      ? 'Job platform designed for fast job discovery and easy applications.'
-      : fallback.positioning;
+  // ── Positioning: FORCE correct value for platform domain ─────────────
+  if (domain === 'platform') {
+    positioning = 'Job platform designed for fast job discovery, fresher-focused filtering, and easy applications.';
+  }
+
+  // ── Final guard: catch any remaining leakage before returning ─────────
+  const POSITION_LEAK = /\bperformance\b|\bdevice\b|\bproduct\b/i;
+  const QW_LEAK       = /\blisting\b|\bimage\b|\bproduct\b/i;
+  if (domain === 'platform') {
+    if (POSITION_LEAK.test(positioning)) {
+      positioning = 'Job platform designed for fast job discovery, fresher-focused filtering, and easy applications.';
+    }
+    if (QW_LEAK.test(quickWin)) {
+      quickWin = 'Add a fresher-only job filter and simplify application flow.';
+    }
   }
 
   // ── Final validation: if still generic after all fixes, use safe fallback ──
