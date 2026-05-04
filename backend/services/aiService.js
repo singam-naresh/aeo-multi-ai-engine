@@ -1738,11 +1738,115 @@ const PRODUCT_BLOCKED = [
 const GENERIC_STRATEGY_RE = /\b(outperform|compete better|improve quality|be better than|do better than)\b/gi;
 
 // Fallback safe responses per domain
+// ── Real competitor maps per sub-domain ──────────────────────────────────────
+const REAL_COMPETITORS = {
+  jobs:     ['Indeed', 'LinkedIn Jobs', 'Naukri', 'Glassdoor', 'Shine'],
+  saas:     ['Salesforce', 'HubSpot', 'Notion', 'Monday.com', 'Asana'],
+  ai_tools: ['ChatGPT', 'Claude', 'Gemini', 'Jasper', 'Copy.ai'],
+  ecommerce:['Amazon', 'Flipkart', 'Shopify', 'Meesho', 'Myntra'],
+};
+
+// Specific feature improvements per sub-domain
+const SPECIFIC_FEATURES = {
+  jobs:     [
+    'fresher job filters and faster one-click applications',
+    'resume upload and job alert setup in under 60 seconds',
+    'location-based job discovery and salary transparency',
+    'campus recruitment and internship listings for graduates',
+    'skill-based job matching and interview preparation tools',
+  ],
+  saas:     [
+    'a simpler onboarding flow and transparent pricing page',
+    'deeper integrations with tools teams already use',
+    'a free tier that delivers core value without a credit card',
+    'faster time-to-value with pre-built templates',
+  ],
+  ai_tools: [
+    'niche use-case focus for developers or content creators',
+    'faster output quality and a side-by-side comparison demo',
+    'a free tier that converts users at key usage limits',
+  ],
+};
+
+// Generic phrases that must never appear in the final strategy
+const GENERIC_STRATEGY_PHRASES = [
+  /\btop competitors\b/i,
+  /\bleading platform\b/i,
+  /\bhighlight strengths\b/i,
+  /\bimprove quality\b/i,
+  /\boutperform\b/i,
+  /\bcompete better\b/i,
+  /\bbe better than\b/i,
+  /\bdo better than\b/i,
+  /\bgeneric\b/i,
+];
+
+function isGenericStrategy(text) {
+  if (!text) return true;
+  return GENERIC_STRATEGY_PHRASES.some((re) => re.test(text));
+}
+
+// Detect sub-domain from query for competitor/feature selection
+function detectSubDomain(normalizedQuery) {
+  const q = normalizedQuery.toLowerCase();
+  if (/\bjob(s)?\b|\bcareer|\bresume|\bhiring|\brecruit|\binternship|\bfresher/.test(q)) return 'jobs';
+  if (/\bai\b|\bchatbot|\bgenerator|\bllm|\bgpt/.test(q)) return 'ai_tools';
+  if (/\bsoftware|\bsaas|\bplatform|\btool\b|\bapp\b|\bdashboard/.test(q)) return 'saas';
+  return 'ecommerce';
+}
+
+// Build a specific strategy sentence using real competitor + real feature
+function buildSpecificStrategy(subDomain, topProduct) {
+  const competitors = REAL_COMPETITORS[subDomain] || REAL_COMPETITORS.ecommerce;
+  const features    = SPECIFIC_FEATURES[subDomain] || SPECIFIC_FEATURES.saas;
+
+  // Use topProduct if it's a real name (not a placeholder), else pick from known list
+  const PLACEHOLDER_RE = /^(top competitor|category leader|leading platform|market leader|competitor [a-z]|product [a-e])/i;
+  const competitor = (!PLACEHOLDER_RE.test(topProduct) && topProduct && topProduct.length > 2)
+    ? topProduct
+    : competitors[0];
+
+  // Pick a feature deterministically (based on competitor name length as seed)
+  const featureIdx = competitor.length % features.length;
+  const feature    = features[featureIdx];
+
+  return `Compete with ${competitor} by improving ${feature}.`;
+}
+
+// Job-specific keyword pool — always realistic search queries
+const JOB_KEYWORDS = [
+  'jobs for freshers',
+  'entry level jobs India',
+  'graduate jobs 2026',
+  'jobs for recent graduates',
+  'fresher jobs in tech',
+  'internship jobs for students',
+  'remote jobs for freshers',
+  'part time jobs for students',
+  'jobs without experience',
+  'first job after graduation',
+];
+
+// Build job keywords driven by query signals
+function buildJobKeywords(normalizedQuery) {
+  const q = normalizedQuery.toLowerCase();
+  const pool = [...JOB_KEYWORDS];
+  const priority = [];
+
+  if (/remote|work from home/.test(q))   priority.push('remote jobs for freshers', 'work from home jobs');
+  if (/fresher|graduate|entry/.test(q))  priority.push('jobs for freshers', 'entry level jobs India', 'graduate jobs 2026');
+  if (/intern/.test(q))                  priority.push('internship jobs for students');
+  if (/tech|software|developer/.test(q)) priority.push('fresher jobs in tech');
+  if (/part.time/.test(q))               priority.push('part time jobs for students');
+
+  return [...new Set([...priority, ...pool])].slice(0, 5);
+}
+
 const PLATFORM_FALLBACK = {
-  recommendedAction: 'Compete with leading platforms like Indeed by improving job discovery and fresher-focused filtering.',
-  focusKeywords:     ['jobs for freshers', 'entry level jobs', 'graduate jobs', 'remote jobs', 'job search platform'],
+  recommendedAction: 'Compete with Indeed by improving fresher job filtering and faster application flow.',
+  focusKeywords:     ['jobs for freshers', 'entry level jobs', 'graduate jobs 2026', 'remote jobs for freshers', 'jobs for recent graduates'],
   positioning:       'Job platform designed for faster job discovery and easy applications.',
-  quickWin:          'Add a dedicated fresher jobs filter on the homepage search bar.',
+  quickWin:          'Add a fresher-only job filter on the homepage search bar.',
 };
 
 const PRODUCT_FALLBACK = {
@@ -1752,12 +1856,6 @@ const PRODUCT_FALLBACK = {
   quickWin:          'Add a feature comparison chart vs the top competitor in the listing.',
 };
 
-/**
- * Rewrite text to remove cross-domain language leakage.
- * @param {string} text
- * @param {'platform'|'product'} domain
- * @returns {string}
- */
 function enforceDomainLanguage(text, domain) {
   if (!text) return text;
   let t = text;
@@ -1773,73 +1871,72 @@ function enforceDomainLanguage(text, domain) {
   return t.replace(/\s{2,}/g, ' ').trim();
 }
 
-/**
- * Check whether a strategy string is specific enough.
- * Returns true if it contains a competitor reference AND a specific feature/action.
- */
 function isSpecificStrategy(text) {
   if (!text) return false;
-  // Must not be purely generic
-  if (GENERIC_STRATEGY_RE.test(text)) return false;
-  // Must contain a specific feature or action word
-  const hasFeature = /\b(filters?|search|apply|onboard|match|discover|recommend|speed|fps|camera|battery|ram|ssd|gpu|price|ux|ui|flow|dashboard|api|integration|support|trial|listing|image|spec|benchmark|comparison|application|fresher|hiring|job|salary|review|rating)\b/i.test(text);
-  return hasFeature;
+  if (isGenericStrategy(text)) return false;
+  return /\b(filters?|search|apply|onboard|match|discover|recommend|speed|fps|camera|battery|ram|ssd|gpu|price|ux|ui|flow|dashboard|api|integration|support|trial|listing|image|spec|benchmark|comparison|application|fresher|hiring|job|salary|review|rating)\b/i.test(text);
 }
 
 /**
- * Enforce domain correctness on the entire finalStrategy object.
- * Rewrites cross-domain language and validates strategy specificity.
- * Falls back to safe domain-specific defaults if validation fails.
- *
- * @param {object} strategy
- * @param {'platform'|'product'} domain
- * @param {string} primaryIntent
- * @returns {object}
+ * Enforce domain correctness, real competitors, and specific strategy.
  */
-function enforceFinalStrategy(strategy, domain, primaryIntent) {
-  const fallback = domain === 'platform' ? PLATFORM_FALLBACK : PRODUCT_FALLBACK;
+function enforceFinalStrategy(strategy, domain, primaryIntent, normalizedQuery, topProduct) {
+  const subDomain = detectSubDomain(normalizedQuery || '');
+  const fallback  = domain === 'platform' ? PLATFORM_FALLBACK : PRODUCT_FALLBACK;
 
-  // ── Rewrite cross-domain language in all text fields ──────────────────
+  // ── Rewrite cross-domain language ────────────────────────────────────
   let recommendedAction = enforceDomainLanguage(strategy.recommendedAction, domain);
   let positioning       = enforceDomainLanguage(strategy.positioning,       domain);
   let priceStrategy     = enforceDomainLanguage(strategy.priceStrategy,     domain);
   let quickWin          = enforceDomainLanguage(strategy.quickWin,          domain);
 
-  // ── Validate strategy specificity — regenerate once if generic ────────
-  if (!isSpecificStrategy(recommendedAction)) {
-    // Try the fallback for this domain
-    recommendedAction = fallback.recommendedAction;
+  // ── Force specific strategy with real competitor ──────────────────────
+  if (isGenericStrategy(recommendedAction) || !isSpecificStrategy(recommendedAction)) {
+    recommendedAction = buildSpecificStrategy(subDomain, topProduct);
   }
 
-  // ── Platform-specific quick win validation ────────────────────────────
+  // ── Platform quick win: reject product-listing language ───────────────
   if (domain === 'platform') {
-    const PLATFORM_QW_BLOCKED = /product listing|image optimization|bullet point|spec badge|hero image|product image|listing image/i;
+    const PLATFORM_QW_BLOCKED = /product listing|image optimization|bullet point|spec badge|hero image|product image|listing image|product title/i;
     if (PLATFORM_QW_BLOCKED.test(quickWin)) {
       quickWin = fallback.quickWin;
     }
   }
 
-  // ── Keyword domain validation ─────────────────────────────────────────
+  // ── Keywords: use job-specific pool for job queries ───────────────────
   let focusKeywords = strategy.focusKeywords;
-  if (domain === 'platform') {
-    // Remove product-style keywords (e.g. "best laptop", "comfortable device")
+  if (subDomain === 'jobs') {
+    focusKeywords = buildJobKeywords(normalizedQuery || '');
+  } else if (domain === 'platform') {
     const PRODUCT_KW_RE = /\b(laptop|phone|shoes|device|gadget|headphone|camera|gpu|ssd|ram|processor)\b/i;
     const filtered = focusKeywords.filter((kw) => !PRODUCT_KW_RE.test(kw));
-    focusKeywords = filtered.length >= 3 ? filtered : fallback.focusKeywords;
+    // Also reject generic platform keywords
+    const GENERIC_KW_RE = /^(job search platform|buying guide|best value product|top platform|leading platform)/i;
+    const cleaned = filtered.filter((kw) => !GENERIC_KW_RE.test(kw));
+    focusKeywords = cleaned.length >= 3 ? cleaned : fallback.focusKeywords;
   } else {
-    // Remove platform-style keywords from product queries
     const PLATFORM_KW_RE = /\b(job(s)?|career|resume|hiring|platform|website|saas|onboarding)\b/i;
     const filtered = focusKeywords.filter((kw) => !PLATFORM_KW_RE.test(kw));
     focusKeywords = filtered.length >= 3 ? filtered : focusKeywords;
   }
 
-  // ── Final check: if positioning still contains wrong-domain words, use fallback ──
-  const PLATFORM_POSITION_BLOCKED = /\bdevice\b|\bproduct\b/i;
+  // ── Positioning: fix platform-domain leakage ─────────────────────────
+  const PLATFORM_POSITION_BLOCKED = /\bdevice\b|\bproduct\b|\bperformance-first\b/i;
   if (domain === 'platform' && PLATFORM_POSITION_BLOCKED.test(positioning)) {
-    positioning = fallback.positioning;
+    positioning = subDomain === 'jobs'
+      ? 'Job platform designed for fast job discovery and easy applications.'
+      : fallback.positioning;
   }
 
-  console.log('DOMAIN ENFORCE:', domain, '| strategy valid:', isSpecificStrategy(recommendedAction));
+  // ── Final validation: if still generic after all fixes, use safe fallback ──
+  if (isGenericStrategy(recommendedAction)) {
+    recommendedAction = fallback.recommendedAction;
+    focusKeywords     = fallback.focusKeywords;
+    positioning       = fallback.positioning;
+    quickWin          = fallback.quickWin;
+  }
+
+  console.log('DOMAIN ENFORCE:', domain, '/', subDomain, '| specific:', isSpecificStrategy(recommendedAction));
 
   return {
     ...strategy,
@@ -2298,7 +2395,7 @@ export async function analyzeWithMultipleModels(query) {
   };
 
   // ── Domain enforcement: rewrite cross-domain language, validate specificity ──
-  const finalStrategy = enforceFinalStrategy(rawFinalStrategy, cleaningDomain, primaryIntent);
+  const finalStrategy = enforceFinalStrategy(rawFinalStrategy, cleaningDomain, primaryIntent, normalizedQuery, topProduct);
 
   // ── Step 6: Sanitize all model text fields ───────────────────────────────
   const repairModel = (m) => ({
