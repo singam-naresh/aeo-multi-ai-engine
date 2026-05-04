@@ -2232,9 +2232,45 @@ function guardStrategy(candidates, primaryIntent) {
   return `Compete by emphasizing the core ${primaryIntent} advantage and clear product benefits over top competitors.`;
 }
 
-// ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
+// ─── Query Intent Router ──────────────────────────────────────────────────────
+
+function detectQueryType(query) {
+  const q = query.toLowerCase();
+  // Platform — job/career/hiring intent
+  if (/\bjob(s)?\b|\bcareer(s)?\b|\bresume\b|\bhiring\b|\brecruit|\binternship\b/.test(q))
+    return 'platform';
+  // Product — physical goods, specs, pricing, device comparisons
+  if (/\blaptop(s)?\b|\bmobile\b|\bphone(s)?\b|\bsmartphone\b|\bac\b|\btv\b|\bunder\b|\bbudget\b|\bprice\b|\bspecs?\b|\bgaming\b|\bheadphone|\bearbuds?\b|\btablet\b|\bwatch\b|\bcamera\b|\bssd\b|\bgpu\b|\bram\b/.test(q))
+    return 'product';
+  // Informational — general knowledge, people, places, facts, rankings
+  return 'informational';
+}
 
 export async function analyzeWithMultipleModels(query) {
+  // ── Query intent routing — must run before cache check ───────────────────
+  const queryType = detectQueryType(query);
+
+  // Informational queries: return early — no AI model calls, no pricing, no competitors
+  if (queryType === 'informational') {
+    console.log('QUERY TYPE: informational — early return');
+    return {
+      groq:       null,
+      gpt:        null,
+      gemini:     null,
+      comparison: null,
+      finalStrategy: {
+        recommendedAction: 'Provide a clear, factual, or ranked answer based on user intent.',
+        positioning:       'Informational query — no optimization strategy required.',
+        priceStrategy:     null,
+        quickWin:          'Focus on accuracy, clarity, and relevance.',
+        focusKeywords:     [],
+        confidence:        0.9,
+        evidence:          'Query is informational in nature and does not require competitive analysis.',
+        groundSignals:     [],
+      },
+    };
+  }
+
   // ── Cache check — return immediately for fresh cached results ────────────
   const cacheKey = query.toLowerCase().trim();
   const cached = queryCache.get(cacheKey);
@@ -2396,13 +2432,23 @@ export async function analyzeWithMultipleModels(query) {
     suggestions: m.suggestions.map(sanitizeOutput),
   });
 
-  // ── FINAL OVERRIDE — job/fresher queries always get clean platform output ──
-  const q = normalizedQuery.toLowerCase();
-  const isJobQuery = q.includes('job') || q.includes('fresher') ||
-                     q.includes('career') || q.includes('resume');
-
+  // ── FINAL SANITY LAYER — runs after all pipeline stages ─────────────────
   const strategy = finalStrategy || {};
-  if (isJobQuery) {
+
+  // Product sanity: remove game titles or irrelevant entities from rankings
+  if (queryType === 'product') {
+    const GAME_TITLES = /\b(pubg|free fire|fortnite|minecraft|valorant|cod|call of duty|bgmi)\b/i;
+    if (groqResult?.ranking?.some((r) => GAME_TITLES.test(r.name || ''))) {
+      groqResult.ranking = groqResult.ranking.filter((r) => !GAME_TITLES.test(r.name || ''));
+    }
+    // Fix broken price strings like "10–" with no value
+    if (strategy.priceStrategy && /\b\d+[–-]\s*$/.test(strategy.priceStrategy)) {
+      strategy.priceStrategy = 'Price slightly above average and justify with strong features and reviews.';
+    }
+  }
+
+  // Platform override — always last, no conditions on content
+  if (queryType === 'platform') {
     strategy.positioning = 'Job platform focused on fast job discovery, fresher-friendly filtering, and quick applications.';
     strategy.quickWin    = 'Add fresher-only filter and enable 1-click apply.';
   }
