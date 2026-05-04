@@ -252,6 +252,143 @@ function cleanModelResult(result, query) {
   };
 }
 
+// ─── Normalization Layer ──────────────────────────────────────────────────────
+
+// Phrase substitution map applied before tokenising the query
+const QUERY_PHRASE_MAP = [
+  [/mobile\s+phone/gi,          'phone'],
+  [/\bbelow\b/gi,               'under'],
+  [/\bbeneath\b/gi,             'under'],
+  [/\bless\s+than\b/gi,         'under'],
+  [/\bfor\s+gamers?\b/gi,       'gaming'],
+  [/\bgaming\s+purpose/gi,      'gaming'],
+  [/\bfor\s+photography\b/gi,   'camera'],
+  [/\bfor\s+photos?\b/gi,       'camera'],
+  // Strip bare "photography" when "camera" is already present (avoids duplication)
+  [/\bcamera\b.*\bphotography\b/gi, (m) => m.replace(/\bphotography\b/gi, '').replace(/\s{2,}/g, ' ').trim()],
+  [/\bphotography\b.*\bcamera\b/gi, (m) => m.replace(/\bphotography\b/gi, '').replace(/\s{2,}/g, ' ').trim()],
+  // Any remaining bare "photography" → "camera"
+  [/\bphotography\b/gi,         'camera'],
+  [/\bfor\s+coding\b/gi,        'for coding'],
+  [/\bfor\s+programming\b/gi,   'for programming'],
+  [/\bfor\s+developers?\b/gi,   'for developers'],
+  [/\bfor\s+students?\b/gi,     'for students'],
+  [/\bunder\s+(\d+)\s*k\b/gi,   (_, n) => `under ${parseInt(n) * 1000}`],
+  [/,+/g,                       ' '],
+  [/\s{2,}/g,                   ' '],
+];
+
+// Normalise a raw user query into a clean, canonical form
+function normalizeQueryText(query) {
+  let q = query.toLowerCase().trim();
+
+  // Apply phrase substitutions in order
+  for (const [pattern, replacement] of QUERY_PHRASE_MAP) {
+    q = q.replace(pattern, typeof replacement === 'function' ? replacement : replacement);
+  }
+
+  // Remove duplicate consecutive words ("phone phone" → "phone")
+  q = q.replace(/\b(\w+)\s+\1\b/gi, '$1');
+
+  // Remove duplicate non-consecutive words — keep first occurrence
+  const words = q.split(/\s+/);
+  const seen = new Set();
+  q = words.filter((w) => {
+    if (seen.has(w)) return false;
+    seen.add(w);
+    return true;
+  }).join(' ');
+
+  return q.trim();
+}
+
+// Enhanced domain detection — returns sub-domains for better keyword shaping
+function detectEnhancedDomain(query) {
+  const q = query.toLowerCase();
+  if (/gaming|fps|\bgpu\b|graphics card/.test(q))                          return 'electronics_gaming';
+  if (/camera|photography|photo|low.light|portrait/.test(q))               return 'electronics_camera';
+  if (/laptop|notebook|macbook|chromebook/.test(q))                        return 'electronics_laptop';
+  if (/phone|smartphone|iphone|android|mobile/.test(q))                    return 'electronics_phone';
+  if (/headphone|earbud|earphone|speaker/.test(q))                         return 'electronics_audio';
+  if (/tablet|ipad/.test(q))                                               return 'electronics_tablet';
+  if (/\bai\b|chatbot|generator|llm|gpt|copilot/.test(q))                  return 'software_ai';
+  if (/website|tool|software|platform|saas|\bapp\b|dashboard|automation/.test(q)) return 'software';
+  if (/job|career|resume|hiring|recruit/.test(q))                          return 'jobs';
+  return 'generic';
+}
+
+// Domain-specific keyword seed terms used to validate and shape keywords
+const DOMAIN_KEYWORD_SEEDS = {
+  electronics_gaming:  ['gaming', 'fps', 'performance', 'gpu', 'graphics'],
+  electronics_camera:  ['camera', 'photography', 'photo', 'low light', 'portrait'],
+  electronics_laptop:  ['laptop', 'laptops', 'notebook'],
+  electronics_phone:   ['phone', 'smartphone', 'mobile'],
+  electronics_audio:   ['headphones', 'earbuds', 'earphones', 'audio'],
+  electronics_tablet:  ['tablet', 'ipad'],
+  software_ai:         ['ai', 'tool', 'platform', 'software', 'generator'],
+  software:            ['tool', 'platform', 'software', 'app', 'website'],
+  jobs:                ['job', 'jobs', 'career', 'resume', 'hiring'],
+  generic:             [],
+};
+
+// Repair broken sentences left after metric removal
+function repairText(text) {
+  if (!text) return text;
+
+  return text
+    // Fix "click-through rate increased by " → "Higher click-through driven by"
+    .replace(/click.through rate\s+increased\s+by\s*/gi, 'Higher click-through driven by ')
+    // Fix "conversion rate increased by " → "Stronger conversion driven by"
+    .replace(/conversion rate?\s+increased\s+by\s*/gi, 'Stronger conversion driven by ')
+    // Fix "driven by driven by" (duplicate from metric removal)
+    .replace(/\bdriven by\s+driven by\b/gi, 'driven by')
+    // Fix "due to due to"
+    .replace(/\bdue to\s+due to\b/gi, 'due to')
+    // Remove trailing connectors at end of sentence
+    .replace(/\s+(by|due to|through|via|with|and|or|for|of|in|on|at|to)\s*[.!?]?$/gi, '.')
+    // Remove incomplete fragments: sentences that are just a connector phrase
+    .replace(/\.\s*(by|due to|through|via|with|and|or)\s*\./gi, '.')
+    // Collapse multiple spaces
+    .replace(/\s{2,}/g, ' ')
+    // Ensure sentence ends with punctuation
+    .replace(/([a-z0-9])\s*$/, '$1.')
+    .trim();
+}
+
+// Normalise and validate keywords using the enhanced domain
+function normalizeKeywords(keywords, normalizedQuery, enhancedDomain) {
+  const seeds = DOMAIN_KEYWORD_SEEDS[enhancedDomain] || [];
+  const coreTerms = [
+    ...normalizedQuery.toLowerCase().split(/\s+/).filter((w) => w.length > 2),
+    ...seeds,
+  ];
+
+  const ALLOWED_LEADING = /^(best|budget|top|cheap|affordable|premium)\s+/i;
+  const WEAK_LEADING    = /^(comfortable|lightweight|stylish|durable|sleek|modern|elegant|beautiful|amazing|great|good|nice)\s+/i;
+
+  const cleaned = keywords
+    .map((kw) => {
+      let k = kw.trim().toLowerCase();
+      // Strip weak leading modifiers
+      k = k.replace(WEAK_LEADING, '');
+      return k;
+    })
+    .filter((kw) => {
+      const words = kw.split(/\s+/);
+      // 2–6 words
+      if (words.length < 2 || words.length > 6) return false;
+      // Must contain at least one core term or seed
+      if (!coreTerms.some((t) => kw.includes(t))) return false;
+      // Must not be just "[modifier] [single-word]" with no product context
+      if (words.length === 2 && !ALLOWED_LEADING.test(kw) && seeds.length > 0) {
+        return seeds.some((s) => kw.includes(s));
+      }
+      return true;
+    });
+
+  return [...new Set(cleaned)].slice(0, 5);
+}
+
 async function callGroq(modelName, systemPrompt, userPrompt) {
   const response = await axios.post(
     GROQ_API_URL,
@@ -1247,40 +1384,59 @@ export function generateFinalStrategy(query, groq, gpt, gemini, comparison) {
 // ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
 
 export async function analyzeWithMultipleModels(query) {
+  // ── Step 1: Normalize the raw query ──────────────────────────────────────
+  const normalizedQuery = normalizeQueryText(query);
+  console.log('NORMALIZED QUERY:', normalizedQuery);
+
   const [groqRaw, gptRaw, geminiRaw] = await Promise.all([
-    analyzeProduct(query),
-    analyzeProductGPT(query),
-    analyzeProductGemini(query),
+    analyzeProduct(normalizedQuery),
+    analyzeProductGPT(normalizedQuery),
+    analyzeProductGemini(normalizedQuery),
   ]);
 
-  // ── Validation & intelligence layer ──────────────────────────────────────
-  const domain = detectCleaningDomain(query);
-  console.log('DOMAIN:', domain);
+  // ── Step 2: Validation & cleaning layer ──────────────────────────────────
+  const cleaningDomain  = detectCleaningDomain(normalizedQuery);
+  const enhancedDomain  = detectEnhancedDomain(normalizedQuery);
+  console.log('DOMAIN:', cleaningDomain, '/', enhancedDomain);
 
-  const groqResult   = cleanModelResult(groqRaw,   query);
-  const gptResult    = cleanModelResult(gptRaw,    query);
-  const geminiResult = cleanModelResult(geminiRaw, query);
+  const groqResult   = cleanModelResult(groqRaw,   normalizedQuery);
+  const gptResult    = cleanModelResult(gptRaw,    normalizedQuery);
+  const geminiResult = cleanModelResult(geminiRaw, normalizedQuery);
 
-  const comparison    = compareModels(groqResult, gptResult, geminiResult);
-  const strategyRaw   = generateFinalStrategy(query, groqResult, gptResult, geminiResult, comparison);
+  // ── Step 3: Generate strategy ─────────────────────────────────────────────
+  const comparison  = compareModels(groqResult, gptResult, geminiResult);
+  const strategyRaw = generateFinalStrategy(normalizedQuery, groqResult, gptResult, geminiResult, comparison);
 
-  // Clean finalStrategy keywords and text fields through the same pipeline
-  const cleanedKeywords = validateKeywords(strategyRaw.focusKeywords, query);
-  console.log('CLEAN KEYWORDS:', cleanedKeywords);
+  // ── Step 4: Normalize & repair finalStrategy ──────────────────────────────
+  // Keywords: validate → normalize with enhanced domain
+  const validatedKeywords   = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
+  const normalizedKeywords  = normalizeKeywords(
+    validatedKeywords.length >= 3 ? validatedKeywords : strategyRaw.focusKeywords,
+    normalizedQuery,
+    enhancedDomain,
+  );
+  console.log('FINAL KEYWORDS:', normalizedKeywords);
 
   const finalStrategy = {
     ...strategyRaw,
-    focusKeywords:    cleanedKeywords.length >= 3 ? cleanedKeywords : strategyRaw.focusKeywords,
-    recommendedAction: removeFakeMetrics(strategyRaw.recommendedAction),
-    positioning:       cleanByDomain(removeFakeMetrics(strategyRaw.positioning), domain),
-    priceStrategy:     cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), domain),
-    quickWin:          removeFakeMetrics(strategyRaw.quickWin),
+    focusKeywords:     normalizedKeywords.length >= 2 ? normalizedKeywords : strategyRaw.focusKeywords,
+    recommendedAction: repairText(removeFakeMetrics(strategyRaw.recommendedAction)),
+    positioning:       repairText(cleanByDomain(removeFakeMetrics(strategyRaw.positioning), cleaningDomain)),
+    priceStrategy:     repairText(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
+    quickWin:          repairText(removeFakeMetrics(strategyRaw.quickWin)),
   };
 
+  // ── Step 5: Repair model insights ────────────────────────────────────────
+  const repairModel = (m) => ({
+    ...m,
+    insights:    repairText(m.insights),
+    suggestions: m.suggestions.map(repairText),
+  });
+
   return {
-    groq:   groqResult,
-    gpt:    gptResult,
-    gemini: geminiResult,
+    groq:   repairModel(groqResult),
+    gpt:    repairModel(gptResult),
+    gemini: repairModel(geminiResult),
     comparison,
     finalStrategy,
   };
