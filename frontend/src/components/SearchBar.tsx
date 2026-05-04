@@ -5,20 +5,40 @@ import { motion } from 'framer-motion';
 interface SearchBarProps {
   onSearch: (query: string) => void;
   isLoading: boolean;
+  // Lifted ref so parent can focus + set value programmatically
+  inputRef?: React.RefObject<HTMLInputElement>;
+  externalQuery?: string;
+  onExternalQueryConsumed?: () => void;
 }
 
-const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading }) => {
+const SearchBar: React.FC<SearchBarProps> = ({
+  onSearch,
+  isLoading,
+  inputRef,
+  externalQuery,
+  onExternalQueryConsumed,
+}) => {
   const [query, setQuery] = React.useState('');
+
+  // When parent pushes an external query (keyword chip / apply strategy),
+  // sync it into local state and fire the search immediately.
+  React.useEffect(() => {
+    if (externalQuery !== undefined && externalQuery !== '') {
+      setQuery(externalQuery);
+      onSearch(externalQuery);
+      onExternalQueryConsumed?.();
+    }
+  }, [externalQuery]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim() && !isLoading) {
-      onSearch(query);
+      onSearch(query.trim());
     }
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6 }}
@@ -31,6 +51,7 @@ const SearchBar: React.FC<SearchBarProps> = ({ onSearch, isLoading }) => {
             <Search size={20} />
           </div>
           <input
+            ref={inputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}

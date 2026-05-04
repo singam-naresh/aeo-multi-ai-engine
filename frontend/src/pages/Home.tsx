@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import SearchBar from '../components/SearchBar';
 import ModelCard from '../components/ModelCard';
@@ -7,12 +7,9 @@ import StrategyCard from '../components/StrategyCard';
 import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle } from 'lucide-react';
 import { analyzeQuery } from '../services/api.js';
 
-// ── Types matching the backend response shape ─────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-interface RankingItem {
-  name: string;
-  rank: number;
-}
+interface RankingItem { name: string; rank: number; }
 
 interface ModelResult {
   ranking: RankingItem[];
@@ -23,10 +20,7 @@ interface ModelResult {
   improvementPotential: string;
 }
 
-interface Comparison {
-  bestModel: string;
-  reason: string;
-}
+interface Comparison { bestModel: string; reason: string; }
 
 interface FinalStrategy {
   recommendedAction: string;
@@ -44,7 +38,16 @@ interface ApiData {
   finalStrategy: FinalStrategy;
 }
 
-// ── Map backend model data → ModelCard props ──────────────────────────────────
+// ── Loading messages ──────────────────────────────────────────────────────────
+
+const LOADING_MESSAGES = [
+  'Analyzing Groq...',
+  'Comparing GPT...',
+  'Evaluating Gemini...',
+  'Building strategy...',
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function toModelCardProps(name: string, model: ModelResult) {
   return {
@@ -58,34 +61,81 @@ function toModelCardProps(name: string, model: ModelResult) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<ApiData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const resultsRef = useRef<HTMLDivElement>(null);
+  const [isLoading, setIsLoading]         = useState(false);
+  const [result, setResult]               = useState<ApiData | null>(null);
+  const [error, setError]                 = useState<string | null>(null);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  // Keyword pushed from StrategyCard / Apply Strategy — consumed by SearchBar
+  const [pendingQuery, setPendingQuery]   = useState('');
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const resultsRef     = useRef<HTMLDivElement>(null);
+
+  // Refs for each model card so "Optimize for X" can scroll to it
+  const modelRefs: Record<string, React.RefObject<HTMLDivElement>> = {
+    groq:   useRef<HTMLDivElement>(null),
+    gpt:    useRef<HTMLDivElement>(null),
+    gemini: useRef<HTMLDivElement>(null),
+  };
+
+  // Rotate loading message every 1.2 s while loading
+  useEffect(() => {
+    if (!isLoading) return;
+    setLoadingMsgIdx(0);
+    const id = setInterval(() => {
+      setLoadingMsgIdx((i) => (i + 1) % LOADING_MESSAGES.length);
+    }, 1200);
+    return () => clearInterval(id);
+  }, [isLoading]);
 
   const handleSearch = async (query: string) => {
+    if (!query.trim()) return;
     setIsLoading(true);
     setResult(null);
     setError(null);
+    setSelectedModel(null);
 
     try {
-      const response = await analyzeQuery(query);
-
-      if (!response.success) {
-        throw new Error('Analysis failed. Please try again.');
-      }
-
+      const response = await analyzeQuery(query.trim());
+      if (!response.success) throw new Error('Analysis failed. Please try again.');
       setResult(response.data);
-
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
     } catch (err: any) {
-      setError(err.message || 'Something went wrong. Make sure the backend is running.');
+      setError(err.message || 'Analysis failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Called by keyword chips and Apply Strategy button
+  const handleKeywordTrigger = (keyword: string) => {
+    setPendingQuery(keyword);
+    // Focus the input after scroll animation settles
+    setTimeout(() => searchInputRef.current?.focus(), 400);
+  };
+
+  // Called by "Optimize for X" button in ComparisonCard
+  const handleOptimizeModel = (modelName: string) => {
+    const key = modelName.toLowerCase() as 'groq' | 'gpt' | 'gemini';
+    setSelectedModel(key);
+    setTimeout(() => {
+      modelRefs[key]?.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 50);
+  };
+
+  // Determine model key from comparison result
+  const bestKey = result
+    ? (result.comparison.bestModel.toLowerCase() as 'groq' | 'gpt' | 'gemini')
+    : null;
+
+  const modelList: Array<{ key: 'groq' | 'gpt' | 'gemini'; label: string }> = [
+    { key: 'groq',   label: 'Groq (Llama 3)' },
+    { key: 'gpt',    label: 'GPT-style'       },
+    { key: 'gemini', label: 'Gemini-style'    },
+  ];
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-purple-500/30">
@@ -110,13 +160,9 @@ export default function Home() {
       </header>
 
       <main className="pt-32 pb-24">
-        {/* Hero Section */}
+        {/* Hero */}
         <section className="max-w-7xl mx-auto px-6 text-center mb-20">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <span className="inline-block px-4 py-1.5 mb-6 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-bold uppercase tracking-widest">
               Next-Gen AI Optimization
             </span>
@@ -128,7 +174,13 @@ export default function Home() {
             </p>
           </motion.div>
 
-          <SearchBar onSearch={handleSearch} isLoading={isLoading} />
+          <SearchBar
+            onSearch={handleSearch}
+            isLoading={isLoading}
+            inputRef={searchInputRef}
+            externalQuery={pendingQuery}
+            onExternalQueryConsumed={() => setPendingQuery('')}
+          />
 
           <motion.div
             initial={{ opacity: 0 }}
@@ -136,13 +188,13 @@ export default function Home() {
             transition={{ delay: 0.8 }}
             className="mt-16 flex flex-wrap justify-center gap-8 opacity-40 grayscale hover:grayscale-0 transition-all duration-500"
           >
-            <div className="flex items-center gap-2"><ShieldCheck size={20} /> <span>Enterprise Grade</span></div>
-            <div className="flex items-center gap-2"><Globe size={20} /> <span>Global Coverage</span></div>
-            <div className="flex items-center gap-2"><BarChart3 size={20} /> <span>Real-time Data</span></div>
+            <div className="flex items-center gap-2"><ShieldCheck size={20} /><span>Enterprise Grade</span></div>
+            <div className="flex items-center gap-2"><Globe size={20} /><span>Global Coverage</span></div>
+            <div className="flex items-center gap-2"><BarChart3 size={20} /><span>Real-time Data</span></div>
           </motion.div>
         </section>
 
-        {/* Loading State */}
+        {/* Loading */}
         <AnimatePresence>
           {isLoading && (
             <motion.div
@@ -152,18 +204,27 @@ export default function Home() {
               className="flex flex-col items-center justify-center py-20"
             >
               <div className="relative w-24 h-24">
-                <div className="absolute inset-0 border-4 border-purple-500/20 rounded-full"></div>
-                <div className="absolute inset-0 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
-                <div className="absolute inset-4 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full animate-pulse"></div>
+                <div className="absolute inset-0 border-4 border-purple-500/20 rounded-full" />
+                <div className="absolute inset-0 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                <div className="absolute inset-4 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full animate-pulse" />
               </div>
-              <p className="mt-8 text-lg font-medium text-muted-foreground animate-pulse">
-                Analyzing with Groq, GPT, Gemini...
-              </p>
+              <AnimatePresence mode="wait">
+                <motion.p
+                  key={loadingMsgIdx}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.3 }}
+                  className="mt-8 text-lg font-medium text-muted-foreground"
+                >
+                  {LOADING_MESSAGES[loadingMsgIdx]}
+                </motion.p>
+              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Error State */}
+        {/* Error */}
         <AnimatePresence>
           {error && (
             <motion.div
@@ -180,42 +241,44 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* Results Section */}
-        {result && (
+        {/* Results */}
+        {result && bestKey && (
           <div ref={resultsRef} className="max-w-7xl mx-auto px-6 space-y-12 scroll-mt-32">
 
-            {/* ── 1. Final Strategy — hero position ── */}
-            <StrategyCard strategy={result.finalStrategy} />
+            {/* 1. Final Strategy */}
+            <StrategyCard
+              strategy={result.finalStrategy}
+              onKeywordClick={handleKeywordTrigger}
+              onApplyStrategy={handleKeywordTrigger}
+            />
 
-            {/* ── 2. Model Cards ── */}
-            {/* Best model spans full width; supporting models share the row below */}
+            {/* 2. Model Cards */}
             <div className="space-y-4">
-              {/* Determine which key maps to the best model */}
               {(() => {
-                const bestKey = result.comparison.bestModel.toLowerCase() as 'groq' | 'gpt' | 'gemini';
-                const models: Array<{ key: 'groq' | 'gpt' | 'gemini'; label: string }> = [
-                  { key: 'groq',   label: 'Groq (Llama 3)' },
-                  { key: 'gpt',    label: 'GPT-style'      },
-                  { key: 'gemini', label: 'Gemini-style'   },
-                ];
-                const best       = models.find((m) => m.key === bestKey) ?? models[0];
-                const supporting = models.filter((m) => m.key !== bestKey);
+                const best       = modelList.find((m) => m.key === bestKey) ?? modelList[0];
+                const supporting = modelList.filter((m) => m.key !== bestKey);
+
+                // When a model is selected, highlight it and dim others
+                const isHighlighted = (key: string) =>
+                  selectedModel === null ? true : selectedModel === key;
 
                 return (
                   <>
-                    {/* Best model — full width */}
                     <ModelCard
                       model={toModelCardProps(best.label, result[best.key])}
                       index={0}
                       isBest
+                      isHighlighted={isHighlighted(best.key)}
+                      cardRef={modelRefs[best.key]}
                     />
-                    {/* Supporting models — 2-column row */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {supporting.map((m, i) => (
                         <ModelCard
                           key={m.key}
                           model={toModelCardProps(m.label, result[m.key])}
                           index={i + 1}
+                          isHighlighted={isHighlighted(m.key)}
+                          cardRef={modelRefs[m.key]}
                         />
                       ))}
                     </div>
@@ -224,10 +287,11 @@ export default function Home() {
               })()}
             </div>
 
-            {/* ── 3. Comparison ── */}
+            {/* 3. Comparison */}
             <ComparisonCard
               bestModel={result.comparison.bestModel}
               reason={result.comparison.reason}
+              onOptimizeModel={handleOptimizeModel}
             />
           </div>
         )}
@@ -239,9 +303,7 @@ export default function Home() {
             <BrainCircuit className="text-purple-500" size={20} />
             <span className="font-bold">AEO Engine</span>
           </div>
-          <p className="text-sm text-muted-foreground">
-            © 2026 AEO Multi-AI Diagnostic Engine. All rights reserved.
-          </p>
+          <p className="text-sm text-muted-foreground">© 2026 AEO Multi-AI Diagnostic Engine. All rights reserved.</p>
           <div className="flex gap-6">
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</a>
             <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Terms</a>

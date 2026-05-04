@@ -13,23 +13,37 @@ interface ModelCardProps {
   model: ModelResult;
   index: number;
   isBest?: boolean;
+  isHighlighted?: boolean; // focused by "Optimize for X" button
+  cardRef?: React.RefObject<HTMLDivElement>;
 }
 
-const ModelCard: React.FC<ModelCardProps> = ({ model, index, isBest = false }) => {
-  // Supporting cards show only top 2 suggestions and a truncated insight
+const ModelCard: React.FC<ModelCardProps> = ({
+  model,
+  index,
+  isBest = false,
+  isHighlighted = false,
+  cardRef,
+}) => {
   const visibleSuggestions = isBest ? model.suggestions : model.suggestions.slice(0, 2);
+
+  // Dimmed when another model is highlighted
+  const dimmed = isHighlighted === false && !isBest ? false : undefined; // handled via prop below
 
   if (isBest) {
     return (
       <motion.div
+        ref={cardRef}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: index * 0.1 }}
-        // Spans full width on its own row — handled by the grid in Home
-        className="relative rounded-2xl p-[1.5px] bg-gradient-to-br from-purple-500 to-blue-500 shadow-[0_0_40px_-8px_rgba(168,85,247,0.4)]"
+        className={[
+          'relative rounded-2xl p-[1.5px] transition-all duration-300',
+          isHighlighted
+            ? 'bg-gradient-to-br from-purple-500 to-blue-500 shadow-[0_0_60px_-8px_rgba(168,85,247,0.6)]'
+            : 'bg-gradient-to-br from-purple-500/60 to-blue-500/60 shadow-[0_0_40px_-8px_rgba(168,85,247,0.4)]',
+        ].join(' ')}
       >
         <div className="bg-[#0d0d14] rounded-[14px] p-8">
-          {/* Badge */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center shadow-md shadow-purple-500/30">
@@ -45,11 +59,8 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, index, isBest = false }) =
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {/* Rankings */}
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Top Rankings
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Top Rankings</p>
               <div className="space-y-2">
                 {model.rankings.map((item, i) => (
                   <div key={i} className="flex items-center gap-3 text-sm text-foreground/90">
@@ -62,19 +73,13 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, index, isBest = false }) =
               </div>
             </div>
 
-            {/* Insights */}
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                Insights
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Insights</p>
               <p className="text-sm text-muted-foreground leading-relaxed">{model.insights}</p>
             </div>
 
-            {/* Suggestions */}
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Suggestions
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Suggestions</p>
               <ul className="space-y-2">
                 {visibleSuggestions.map((s, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-foreground/80">
@@ -90,27 +95,28 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, index, isBest = false }) =
     );
   }
 
-  // ── Supporting / collapsed card ──────────────────────────────────────────
+  // ── Supporting card ──────────────────────────────────────────────────────
   return (
     <motion.div
+      ref={cardRef}
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: index * 0.1 }}
-      className="relative bg-card/30 backdrop-blur-xl border border-white/5 rounded-2xl p-6 hover:border-white/10 transition-all duration-300"
+      className={[
+        'relative bg-card/30 backdrop-blur-xl border rounded-2xl p-6 transition-all duration-300',
+        isHighlighted
+          ? 'border-purple-500/50 shadow-[0_0_30px_-8px_rgba(168,85,247,0.4)] opacity-100'
+          : 'border-white/5 hover:border-white/10 opacity-60',
+      ].join(' ')}
     >
-      {/* Supporting label */}
       <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50 mb-3">
         Supporting Insights
       </p>
-
       <h3 className="text-base font-bold text-foreground/80 tracking-tight mb-5">{model.name}</h3>
 
       <div className="space-y-5">
-        {/* Top ranking only */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-            Top Ranking
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Top Ranking</p>
           <div className="flex items-center gap-2 text-sm text-foreground/70">
             <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[9px] font-bold text-muted-foreground">
               1
@@ -119,11 +125,8 @@ const ModelCard: React.FC<ModelCardProps> = ({ model, index, isBest = false }) =
           </div>
         </div>
 
-        {/* Top 2 suggestions only */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-            Key Suggestions
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Key Suggestions</p>
           <ul className="space-y-1.5">
             {visibleSuggestions.map((s, i) => (
               <li key={i} className="flex items-start gap-2 text-xs text-foreground/60">

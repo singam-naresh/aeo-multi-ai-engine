@@ -5,9 +5,10 @@ import { Trophy, Zap } from 'lucide-react';
 interface ComparisonCardProps {
   bestModel: string;
   reason: string;
+  onOptimizeModel: (model: string) => void;
 }
 
-const ComparisonCard: React.FC<ComparisonCardProps> = ({ bestModel, reason }) => {
+const ComparisonCard: React.FC<ComparisonCardProps> = ({ bestModel, reason, onOptimizeModel }) => {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -18,7 +19,7 @@ const ComparisonCard: React.FC<ComparisonCardProps> = ({ bestModel, reason }) =>
         <div className="flex-shrink-0 w-20 h-20 rounded-2xl bg-gradient-to-br from-purple-500 to-blue-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
           <Trophy size={40} className="text-white" />
         </div>
-        
+
         <div className="flex-grow text-center md:text-left">
           <div className="flex items-center justify-center md:justify-start gap-2 mb-2">
             <Zap size={16} className="text-yellow-400 fill-yellow-400" />
@@ -27,13 +28,15 @@ const ComparisonCard: React.FC<ComparisonCardProps> = ({ bestModel, reason }) =>
           <h2 className="text-3xl font-bold text-foreground mb-3">
             {bestModel} <span className="text-muted-foreground font-normal">is winning the AEO race</span>
           </h2>
-          <p className="text-muted-foreground text-lg max-w-2xl leading-relaxed">
-            {reason}
-          </p>
+          <p className="text-muted-foreground text-lg max-w-2xl leading-relaxed">{reason}</p>
         </div>
 
         <div className="flex-shrink-0">
-          <button className="px-8 py-4 bg-white text-black font-bold rounded-xl hover:bg-opacity-90 transition-all active:scale-95">
+          {/* Scrolls to model cards section and highlights the best model */}
+          <button
+            onClick={() => onOptimizeModel(bestModel)}
+            className="px-8 py-4 bg-white text-black font-bold rounded-xl hover:bg-white/90 transition-all active:scale-95"
+          >
             Optimize for {bestModel}
           </button>
         </div>
