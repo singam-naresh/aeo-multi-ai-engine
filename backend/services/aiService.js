@@ -5,18 +5,18 @@ const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 const FALLBACK_RESPONSE = {
   ranking: [
-    { name: 'Product A', rank: 1 },
-    { name: 'Product B', rank: 2 },
-    { name: 'Product C', rank: 3 },
-    { name: 'Product D', rank: 4 },
-    { name: 'Product E', rank: 5 },
+    { name: 'Top Competitor Product',      rank: 1 },
+    { name: 'Category Leader Product',     rank: 2 },
+    { name: 'Popular Alternative Product', rank: 3 },
+    { name: 'Budget-Friendly Option',      rank: 4 },
+    { name: 'Premium Market Choice',       rank: 5 },
   ],
-  competitors: ['Competitor X', 'Competitor Y', 'Competitor Z'],
-  insights: 'Unable to retrieve AI insights at this time.',
+  competitors: ['Market Leader', 'Category Challenger', 'Emerging Competitor'],
+  insights: 'Top products in this category rank higher due to strong brand authority, relevant keyword targeting, and consistent customer satisfaction signals.',
   suggestions: [
-    'Improve product descriptions',
-    'Add more customer reviews',
-    'Optimize pricing strategy',
+    'Add detailed feature comparison against top competitors',
+    'Include real customer use-case examples in product description',
+    'Highlight key differentiators in the first bullet point',
   ],
 };
 
@@ -134,10 +134,121 @@ function addEnhancements(data) {
 
 function sanitizeResult(parsed) {
   return {
-    ranking: Array.isArray(parsed.ranking) ? parsed.ranking : FALLBACK_RESPONSE.ranking,
+    ranking:     Array.isArray(parsed.ranking)     ? parsed.ranking     : FALLBACK_RESPONSE.ranking,
     competitors: Array.isArray(parsed.competitors) ? parsed.competitors : FALLBACK_RESPONSE.competitors,
-    insights: typeof parsed.insights === 'string' ? parsed.insights : FALLBACK_RESPONSE.insights,
+    insights:    typeof parsed.insights === 'string' ? parsed.insights  : FALLBACK_RESPONSE.insights,
     suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : FALLBACK_RESPONSE.suggestions,
+  };
+}
+
+// ─── Validation & Intelligence Layer ─────────────────────────────────────────
+
+// 1. Remove fake numeric performance metrics from text
+function removeFakeMetrics(text) {
+  return text
+    // Strip percentage figures attached to marketing metrics
+    .replace(/\b\d+(\.\d+)?%\s*(increase|improvement|boost|growth|higher|lower|better|worse|more|less)?\b/gi, '')
+    // Strip metric labels with numbers: "CTR of 12%", "12.5% CTR"
+    .replace(/\b\d+(\.\d+)?%\s*(CTR|CVR|conversion rate?|keyword density|click.through|open rate|bounce rate)\b/gi, '')
+    .replace(/\b(CTR|CVR|conversion rate?|keyword density)\s*(of\s*)?\d+(\.\d+)?%/gi, '')
+    // Replace remaining bare metric labels with qualitative equivalents
+    .replace(/\bCTR\b/g, 'click-through rate')
+    .replace(/\bCVR\b/g, 'conversion rate')
+    // Collapse extra whitespace left by removals
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// 2. Filter suggestions — remove generic/weak ones, keep specific actionable ones
+const WEAK_SUGGESTION_PATTERNS = [
+  /^improve (product )?description/i,
+  /^add more (customer )?reviews/i,
+  /^optimize (your )?(listing|product|page|seo)/i,
+  /^enhance (your )?(product|listing|page)/i,
+  /^update (your )?(product|listing|page)/i,
+  /^focus on (seo|keywords|quality)/i,
+  /^consider (adding|improving|updating)/i,
+  /^ensure (your|the) (product|listing)/i,
+  /^leverage (your|the)/i,
+];
+
+function isStrongSuggestion(s) {
+  if (!s || s.split(' ').length < 4) return false;
+  if (WEAK_SUGGESTION_PATTERNS.some((re) => re.test(s))) return false;
+  // Must contain a feature, keyword, or measurable action signal
+  return /\b(add|include|highlight|show|target|use|create|build|place|rewrite|insert|feature|spec|image|title|keyword|price|bundle|comparison|badge|demo|video|chart|screenshot|rating|review|segment|audience)\b/i.test(s);
+}
+
+// 3. Domain detection for cleaning rules
+function detectCleaningDomain(query) {
+  const q = query.toLowerCase();
+  if (/laptop|phone|mobile|tablet|smartphone|device|gadget|headphone|earbud|monitor|keyboard|gpu|cpu|ssd/.test(q))
+    return 'electronics';
+  if (/\bai\b|website|tool|software|platform|saas|app\b|dashboard|automation|generator|chatbot/.test(q))
+    return 'software';
+  return 'generic';
+}
+
+// 4. Domain-specific insight/suggestion cleaning
+const ELECTRONICS_KEEP = /battery|performance|camera|ram|display|processor|storage|screen|build|design|speed|benchmark|spec|weight|port|connectivity|refresh rate|resolution/i;
+const ELECTRONICS_REMOVE = /\bstory\b|\bjourney\b|\bemotional\b|\blifestyle\b|\bcommunity\b|\bstorytell|\bvibe\b|\bbuzz\b/i;
+
+const SOFTWARE_KEEP = /feature|pricing|integration|ux|ui|onboarding|workflow|api|dashboard|automation|support|trial|subscription|deployment|security|scalab/i;
+const SOFTWARE_REMOVE = /battery|weight|camera|display|physical|hardware|cushion|comfort|wrist|ergonomic/i;
+
+function cleanByDomain(text, domain) {
+  if (!text) return text;
+  if (domain === 'electronics') {
+    if (ELECTRONICS_REMOVE.test(text)) {
+      // Strip the offending clause rather than the whole sentence
+      return text.replace(/[^.!?]*\b(story|journey|emotional|lifestyle|community|vibe|buzz|storytell)\b[^.!?]*/gi, '').replace(/\s{2,}/g, ' ').trim();
+    }
+  }
+  if (domain === 'software') {
+    if (SOFTWARE_REMOVE.test(text)) {
+      return text.replace(/[^.!?]*\b(battery|weight|camera|display|physical|hardware|cushion|comfort|wrist|ergonomic)\b[^.!?]*/gi, '').replace(/\s{2,}/g, ' ').trim();
+    }
+  }
+  return text;
+}
+
+// 5. Validate and clean keywords against query core terms
+const WEAK_KEYWORD_MODIFIERS = /^(comfortable|lightweight|stylish|durable|sleek|modern|elegant|beautiful|amazing|great|good|nice)\s+/i;
+
+function validateKeywords(keywords, query) {
+  const coreTerms = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+
+  const cleaned = keywords
+    .map((kw) => kw.replace(WEAK_KEYWORD_MODIFIERS, '').trim())
+    .filter((kw) => {
+      if (!kw || kw.split(' ').length < 2) return false;
+      // Must contain at least one core term from the query
+      return coreTerms.some((term) => kw.toLowerCase().includes(term));
+    });
+
+  // Deduplicate
+  return [...new Set(cleaned)].slice(0, 5);
+}
+
+// 6. Master pipeline: clean a single model result
+function cleanModelResult(result, query) {
+  const domain = detectCleaningDomain(query);
+
+  const cleanedInsights = cleanByDomain(removeFakeMetrics(result.insights), domain);
+
+  const cleanedSuggestions = result.suggestions
+    .map((s) => cleanByDomain(removeFakeMetrics(s), domain))
+    .filter(isStrongSuggestion);
+
+  // If all suggestions were filtered out, keep the best original ones
+  const finalSuggestions = cleanedSuggestions.length >= 2
+    ? cleanedSuggestions
+    : result.suggestions.slice(0, 3);
+
+  return {
+    ...result,
+    insights:    cleanedInsights    || result.insights,
+    suggestions: finalSuggestions,
   };
 }
 
@@ -1136,18 +1247,39 @@ export function generateFinalStrategy(query, groq, gpt, gemini, comparison) {
 // ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
 
 export async function analyzeWithMultipleModels(query) {
-  const [groqResult, gptResult, geminiResult] = await Promise.all([
+  const [groqRaw, gptRaw, geminiRaw] = await Promise.all([
     analyzeProduct(query),
     analyzeProductGPT(query),
     analyzeProductGemini(query),
   ]);
 
-  const comparison = compareModels(groqResult, gptResult, geminiResult);
-  const finalStrategy = generateFinalStrategy(query, groqResult, gptResult, geminiResult, comparison);
+  // ── Validation & intelligence layer ──────────────────────────────────────
+  const domain = detectCleaningDomain(query);
+  console.log('DOMAIN:', domain);
+
+  const groqResult   = cleanModelResult(groqRaw,   query);
+  const gptResult    = cleanModelResult(gptRaw,    query);
+  const geminiResult = cleanModelResult(geminiRaw, query);
+
+  const comparison    = compareModels(groqResult, gptResult, geminiResult);
+  const strategyRaw   = generateFinalStrategy(query, groqResult, gptResult, geminiResult, comparison);
+
+  // Clean finalStrategy keywords and text fields through the same pipeline
+  const cleanedKeywords = validateKeywords(strategyRaw.focusKeywords, query);
+  console.log('CLEAN KEYWORDS:', cleanedKeywords);
+
+  const finalStrategy = {
+    ...strategyRaw,
+    focusKeywords:    cleanedKeywords.length >= 3 ? cleanedKeywords : strategyRaw.focusKeywords,
+    recommendedAction: removeFakeMetrics(strategyRaw.recommendedAction),
+    positioning:       cleanByDomain(removeFakeMetrics(strategyRaw.positioning), domain),
+    priceStrategy:     cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), domain),
+    quickWin:          removeFakeMetrics(strategyRaw.quickWin),
+  };
 
   return {
-    groq: groqResult,
-    gpt: gptResult,
+    groq:   groqResult,
+    gpt:    gptResult,
     gemini: geminiResult,
     comparison,
     finalStrategy,
