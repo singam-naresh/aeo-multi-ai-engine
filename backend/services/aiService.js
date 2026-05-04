@@ -2246,9 +2246,25 @@ function detectQueryType(query) {
   return 'informational';
 }
 
+// Extract price constraint from query.
+// Returns a number (e.g. 20000), 'budget', 'premium', or null.
+function extractBudget(query) {
+  const q = query.toLowerCase();
+  // Numeric constraint: "under 20000", "below 15k", "less than 30000"
+  const match = q.match(/(?:under|below|less\s+than)\s?(\d{3,6})/);
+  if (match) return parseInt(match[1], 10);
+  // "20k" shorthand
+  const kMatch = q.match(/(\d{1,3})k\b/);
+  if (kMatch) return parseInt(kMatch[1], 10) * 1000;
+  if (/\bbudget\b|\bcheap\b|\baffordable\b/.test(q)) return 'budget';
+  if (/\bpremium\b|\bflagship\b|\bhigh.end\b/.test(q)) return 'premium';
+  return null;
+}
+
 export async function analyzeWithMultipleModels(query) {
   // ── Query intent routing — must run before cache check ───────────────────
   const queryType = detectQueryType(query);
+  const budget    = extractBudget(query);
 
   // Informational queries: return early — no AI model calls, no pricing, no competitors
   if (queryType === 'informational') {
@@ -2435,15 +2451,45 @@ export async function analyzeWithMultipleModels(query) {
   // ── FINAL SANITY LAYER — runs after all pipeline stages ─────────────────
   const strategy = finalStrategy || {};
 
-  // Product sanity: remove game titles or irrelevant entities from rankings
   if (queryType === 'product') {
+    // Remove game titles or irrelevant entities from rankings
     const GAME_TITLES = /\b(pubg|free fire|fortnite|minecraft|valorant|cod|call of duty|bgmi)\b/i;
     if (groqResult?.ranking?.some((r) => GAME_TITLES.test(r.name || ''))) {
       groqResult.ranking = groqResult.ranking.filter((r) => !GAME_TITLES.test(r.name || ''));
     }
-    // Fix broken price strings like "10–" with no value
-    if (strategy.priceStrategy && /\b\d+[–-]\s*$/.test(strategy.priceStrategy)) {
-      strategy.priceStrategy = 'Price slightly above average and justify with strong features and reviews.';
+
+    // Fix broken price strings like "10–" with no trailing value
+    if (strategy.priceStrategy) {
+      strategy.priceStrategy = strategy.priceStrategy
+        .replace(/\b10[–-]\s*(?!\d)/g, '10–20% ')
+        .replace(/\b\d+[–-]\s*$/, 'Price slightly above average and justify with strong features and reviews.')
+        .trim();
+    }
+
+    // Fix wrong strategy language (platform words leaking into product)
+    if (strategy.recommendedAction?.toLowerCase().includes('onboarding flow')) {
+      strategy.recommendedAction = 'Differentiate with stronger specs and real-world performance in this price segment.';
+    }
+
+    // ── Budget-aware overrides ──────────────────────────────────────────
+    const isBudgetQuery = (typeof budget === 'number' && budget <= 25000) || budget === 'budget';
+
+    if (isBudgetQuery) {
+      strategy.positioning = 'Budget-focused device optimized for performance, battery life, and value for money.';
+      strategy.priceStrategy = 'Stay within budget range and compete on performance-per-rupee, not premium branding.';
+      strategy.recommendedAction = 'Focus on price-to-performance advantage — highlight gaming, battery, and display within budget range.';
+
+      // Replace flagship competitors with realistic budget-segment alternatives
+      const FLAGSHIP_BRANDS = /\b(iphone|samsung galaxy s\d|oneplus \d{2}|pixel \d|galaxy z|galaxy ultra)\b/i;
+      if (groqResult?.competitors?.some((c) => FLAGSHIP_BRANDS.test(c))) {
+        groqResult.competitors = ['Xiaomi Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
+      }
+    }
+
+    // ── Premium-aware overrides ─────────────────────────────────────────
+    if (budget === 'premium') {
+      strategy.positioning = 'Premium device built for top-tier performance, build quality, and brand trust.';
+      strategy.priceStrategy = 'Price at the premium tier — justify with superior specs, build quality, and 4.5★+ reviews.';
     }
   }
 
