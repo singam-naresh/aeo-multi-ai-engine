@@ -1579,9 +1579,177 @@ function generateQuickWin(primaryIntent) {
   return map[primaryIntent] || map['general performance'];
 }
 
+// ─── Adaptive + Data-Augmented Layer ─────────────────────────────────────────
+
+// In-memory query cache — avoids redundant LLM calls for repeated queries
+const queryCache = new Map();
+
+// 1. Lightweight intent signals from query heuristics (no scraping, no fake data)
+function getLightweightSignals(normalizedQuery) {
+  const q = normalizedQuery.toLowerCase();
+  // Feature signals checked first — more specific than "best" or "compare"
+  if (/\bcamera\b|\bfps\b|\bbattery\b|\bram\b|\bssd\b|\bgpu\b|\bprocessor\b/.test(q)) return { intentType: 'feature' };
+  if (/\bunder\b|\bbudget\b|\bcheap\b|\baffordable\b/.test(q)) return { intentType: 'budget' };
+  if (/\bbest\b|\bvs\b|\bcompare\b|\balternative\b|\breview\b/.test(q)) return { intentType: 'comparison' };
+  return { intentType: 'comparison' }; // default — most queries are comparison-driven
+}
+
+// 2. Score a strategy candidate string for quality
+function scoreStrategy(text) {
+  if (!text) return 0;
+  let score = 0;
+  const words = text.split(/\s+/);
+  // Length sweet spot: 8–20 words
+  if (words.length >= 8 && words.length <= 20) score += 2;
+  else if (words.length > 4) score += 1;
+  // Contains an action verb
+  if (/\b(focus|win|position|compete|target|lead|highlight|emphasize|differentiate|outperform|build|show)\b/i.test(text)) score += 2;
+  // Mentions a feature signal
+  if (/\b(fps|camera|battery|ram|ssd|cpu|gpu|performance|speed|price|value|quality|design|display)\b/i.test(text)) score += 2;
+  // Mentions a competitor or comparison
+  if (/\b(vs|than|over|against|better|outperform|competitor|alternative)\b/i.test(text)) score += 2;
+  // Penalise generic filler
+  if (/\b(optimize|improve|enhance|leverage|ensure|consider)\b/i.test(text)) score -= 2;
+  return score;
+}
+
+// 3. Refine the recommended action based on lightweight signals
+function refineWithSignals(recommendedAction, signals) {
+  const { intentType } = signals;
+  if (intentType === 'budget') {
+    // Ensure pricing angle is present
+    if (!/price|value|budget|cost|afford/i.test(recommendedAction)) {
+      return recommendedAction.replace(/\.$/, '') + ' — lead with price-to-performance advantage.';
+    }
+  }
+  if (intentType === 'comparison') {
+    // Ensure competitor comparison angle is present
+    if (!/vs|than|over|competitor|outperform|better/i.test(recommendedAction)) {
+      return recommendedAction.replace(/\.$/, '') + ' — make the comparison impossible to ignore.';
+    }
+  }
+  if (intentType === 'feature') {
+    // Ensure a specific feature is called out
+    if (!/feature|spec|fps|camera|battery|ram|ssd|display|performance/i.test(recommendedAction)) {
+      return recommendedAction.replace(/\.$/, '') + ' — lead with the standout feature.';
+    }
+  }
+  return recommendedAction;
+}
+
+// 4. Generate keywords dynamically via LLM, with static pool as fallback
+async function generateDynamicKeywords(normalizedQuery, primaryIntent, secondaryIntent) {
+  const secondaryLine = secondaryIntent ? `Optional secondary intent: ${secondaryIntent}` : '';
+  const prompt = `Generate 8 realistic Google search keywords for: "${normalizedQuery}"
+Focus on intent: ${primaryIntent}
+${secondaryLine}
+Rules:
+- no generic adjectives (comfortable, lightweight, stylish)
+- no repetition or near-synonyms
+- must look like real user searches (2–6 words each)
+- no brand names unless part of the query
+- no explanations
+Return ONLY a valid JSON array of strings. Example: ["keyword one","keyword two"]`;
+
+  try {
+    const raw = await callGroq(
+      'keywords',
+      'You are a JSON-only keyword research assistant. Return only a raw JSON array of strings. No markdown, no explanation.',
+      prompt,
+    );
+
+    // Parse — try direct, then regex extract
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (_) {
+      const m = raw.match(/\[[\s\S]*?\]/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch (_) {} }
+    }
+
+    if (!Array.isArray(parsed)) return null;
+
+    // Validate each keyword
+    const valid = parsed
+      .filter((k) => typeof k === 'string')
+      .map((k) => k.toLowerCase().trim().replace(/\s{2,}/g, ' '))
+      .filter((k) => {
+        const words = k.split(' ');
+        return words.length >= 2 && words.length <= 6;
+      });
+
+    return removeKeywordRedundancy([...new Set(valid)]).slice(0, 5);
+  } catch (_) {
+    return null; // caller falls back to static pool
+  }
+}
+
+// 5. Generate 3 strategy candidates and pick the best-scoring one
+function generateStrategyCandidates(primaryIntent, topProduct) {
+  const p = topProduct || 'the top competitor';
+
+  // Each intent has 3 distinct angle variations
+  const candidateMap = {
+    'gaming performance': [
+      `Focus on raw gaming performance — highlight FPS stability, cooling system, and battery endurance better than ${p}`,
+      `Beat ${p} on the spec sheet — lead with GPU benchmark scores and thermal performance in every listing image`,
+      `Own the budget gaming segment — show that consistent FPS at this price point beats ${p} in real gameplay`,
+    ],
+    'camera quality': [
+      `Win on camera clarity — emphasize low-light performance and real photo samples that outperform ${p}`,
+      `Make the camera the hero — side-by-side shots against ${p} in every product image and listing`,
+      `Target photography enthusiasts who feel ${p} overcharges — deliver comparable image quality at a lower price`,
+    ],
+    'performance for development': [
+      `Position as a developer-first machine — better keyboard, RAM options, and Linux compatibility than ${p}`,
+      `Win developers who are tired of ${p}'s limitations — highlight open-source support, port selection, and upgrade paths`,
+      `Target CS students and junior devs who need power without the MacBook price — make the spec comparison obvious`,
+    ],
+    'ai productivity': [
+      `Differentiate from ${p} by targeting a specific niche — developers, creators, or marketers — with purpose-built AI workflows`,
+      `Compete with ${p} on speed and simplicity — show output quality side-by-side and let the results speak`,
+      `Win users frustrated with ${p}'s pricing — offer a free tier that delivers 80% of the value at zero cost`,
+    ],
+    'battery life': [
+      `Lead with endurance — show real-world battery benchmarks and all-day usage scenarios that outlast ${p}`,
+      `Make battery life the headline — a single charge comparison chart against ${p} is worth more than any spec sheet`,
+      `Target road warriors who've been let down by ${p}'s battery claims — use real screen-on time data`,
+    ],
+    'student value': [
+      `Own the student segment — bundle software, offer education pricing, and highlight portability advantages over ${p}`,
+      `Beat ${p} on total cost of ownership for students — include software bundles and warranty in the price comparison`,
+      `Target first-year students who can't justify ${p}'s price — show what they get for less`,
+    ],
+    'budget': [
+      `Compete on value — match ${p}'s core specs at a lower price and make the price-to-performance gap impossible to ignore`,
+      `Win price-sensitive buyers by being transparent — publish a direct spec comparison vs ${p} at the same price`,
+      `Target buyers who've been priced out by ${p} — show that budget doesn't mean compromise on the features they care about`,
+    ],
+    'professional use': [
+      `Target professionals who need reliability — highlight security features, build quality, and support options vs ${p}`,
+      `Win enterprise buyers frustrated with ${p}'s support — lead with SLA, security certifications, and IT management tools`,
+      `Position as the professional alternative to ${p} — same reliability, better value, stronger support`,
+    ],
+    'general performance': [
+      `Outperform ${p} where it matters most — identify its weakest reviewed feature and make that your headline strength`,
+      `Find the gap ${p} leaves open — read its 1-star reviews and build your positioning around solving those exact complaints`,
+      `Don't compete with ${p} on everything — pick one dimension where you clearly win and own that story completely`,
+    ],
+  };
+
+  const candidates = candidateMap[primaryIntent] || candidateMap['general performance'];
+  // Score each and return the best
+  return candidates.reduce((best, c) => scoreStrategy(c) >= scoreStrategy(best) ? c : best, candidates[0]);
+}
+
 // ─── Multi-Model Orchestrator ─────────────────────────────────────────────────
 
 export async function analyzeWithMultipleModels(query) {
+  // ── Cache check — return immediately for repeated queries ─────────────
+  const cacheKey = query.toLowerCase().trim();
+  if (queryCache.has(cacheKey)) {
+    console.log('CACHE HIT:', cacheKey);
+    return queryCache.get(cacheKey);
+  }
+
   // ── Step 1: Normalize the raw query ──────────────────────────────────────
   const normalizedQuery = normalizeQueryText(query);
   console.log('NORMALIZED QUERY:', normalizedQuery);
@@ -1605,38 +1773,43 @@ export async function analyzeWithMultipleModels(query) {
   const comparison  = compareModels(groqResult, gptResult, geminiResult);
   const strategyRaw = generateFinalStrategy(normalizedQuery, groqResult, gptResult, geminiResult, comparison);
 
-  // ── Step 4: Decision + Humanization layer ────────────────────────────────
+  // ── Step 4: Decision + Humanization + Adaptive layer ────────────────────
   const { primary: primaryIntent, secondary: secondaryIntent } = extractIntent(normalizedQuery);
-  const priceRange   = extractPriceRange(normalizedQuery);
-  const topProduct   = groqResult.ranking?.[0]?.name || gptResult.ranking?.[0]?.name || 'the top competitor';
+  const priceRange = extractPriceRange(normalizedQuery);
+  const signals    = getLightweightSignals(normalizedQuery);
+  const topProduct = groqResult.ranking?.[0]?.name || gptResult.ranking?.[0]?.name || 'the top competitor';
 
-  // Extract the core product noun from the normalized query for keyword generation
-  // Strip modifiers, price ranges, and intent words to get the base product
-  const productNoun = normalizedQuery
-    .replace(/\b(best|budget|top|cheap|affordable|premium|gaming|camera|coding|under\s+\d+)\b/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim() || normalizedQuery.split(' ').slice(-1)[0];
+  console.log('INTENT:', primaryIntent, '/', secondaryIntent, '| SIGNAL:', signals.intentType);
 
-  // Generate intent-driven keywords, then remove redundancy
-  const intentKeywords = generateIntentKeywords(primaryIntent, productNoun, priceRange);
-  const dedupedKeywords = removeKeywordRedundancy(intentKeywords);
-
-  // Fall back to validated AI keywords if intent keywords are too generic
-  const validatedKeywords  = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
-  const normalizedKeywords = normalizeKeywords(
-    validatedKeywords.length >= 3 ? validatedKeywords : strategyRaw.focusKeywords,
-    normalizedQuery,
-    enhancedDomain,
-  );
-
-  // Prefer intent keywords when they're specific; fall back to AI-derived ones
-  const finalKeywords = dedupedKeywords.length >= 3 ? dedupedKeywords : normalizedKeywords;
+  // ── Keywords: LLM-dynamic first, static pool fallback ──────────────────
+  let finalKeywords;
+  const dynamicKw = await generateDynamicKeywords(normalizedQuery, primaryIntent, secondaryIntent);
+  if (dynamicKw && dynamicKw.length >= 3) {
+    finalKeywords = dynamicKw;
+  } else {
+    // Fallback: static intent pool → validate → normalize
+    const productNoun = normalizedQuery
+      .replace(/\b(best|budget|top|cheap|affordable|premium|gaming|camera|coding|under\s+\d+)\b/gi, '')
+      .replace(/\s{2,}/g, ' ').trim() || normalizedQuery.split(' ').slice(-1)[0];
+    const intentKw    = generateIntentKeywords(primaryIntent, productNoun, priceRange);
+    const validatedKw = validateKeywords(strategyRaw.focusKeywords, normalizedQuery);
+    const normalizedKw = normalizeKeywords(
+      validatedKw.length >= 3 ? validatedKw : strategyRaw.focusKeywords,
+      normalizedQuery, enhancedDomain,
+    );
+    const poolKw = removeKeywordRedundancy(intentKw);
+    finalKeywords = poolKw.length >= 3 ? poolKw : normalizedKw;
+  }
   console.log('FINAL KEYWORDS:', finalKeywords);
+
+  // ── Strategy: multi-candidate scoring ──────────────────────────────────
+  const bestAction = generateStrategyCandidates(primaryIntent, topProduct);
+  const refinedAction = refineWithSignals(repairText(bestAction), signals);
 
   const finalStrategy = {
     ...strategyRaw,
     focusKeywords:     finalKeywords,
-    recommendedAction: repairText(generateHumanStrategy(primaryIntent, topProduct)),
+    recommendedAction: refinedAction,
     positioning:       repairText(generatePositioning(primaryIntent, priceRange ? 'budget' : primaryIntent)),
     priceStrategy:     repairText(cleanByDomain(removeFakeMetrics(strategyRaw.priceStrategy), cleaningDomain)),
     quickWin:          generateQuickWin(primaryIntent),
@@ -1649,11 +1822,19 @@ export async function analyzeWithMultipleModels(query) {
     suggestions: m.suggestions.map(repairText),
   });
 
-  return {
+  const result = {
     groq:   repairModel(groqResult),
     gpt:    repairModel(gptResult),
     gemini: repairModel(geminiResult),
     comparison,
     finalStrategy,
   };
+
+  // Cache result — evict oldest entry if cache grows beyond 100 items
+  if (queryCache.size >= 100) {
+    queryCache.delete(queryCache.keys().next().value);
+  }
+  queryCache.set(cacheKey, result);
+
+  return result;
 }
