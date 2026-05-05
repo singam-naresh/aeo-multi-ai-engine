@@ -40,6 +40,12 @@ function stripGenericPhrases(text) {
 
 // ── Intent Detection ──────────────────────────────────────────────────────────
 
+// Detect if the query is asking about future or uncertain timeframes
+function isFutureQuery(query) {
+  const q = query.toLowerCase();
+  return /\b(2026|2027|2028|future|upcoming|next year|will be|going to be|expected|predicted|best in future)\b/.test(q);
+}
+
 export function detectIntent(query) {
   const q = query.toLowerCase().trim();
 
@@ -67,6 +73,34 @@ export function detectIntent(query) {
 // ── Prompt Builders ───────────────────────────────────────────────────────────
 
 function buildPrompt(query, intent) {
+  // ── Future / uncertain timeframe queries ─────────────────────────────────
+  // Never guess exact future products — frame as current best + market direction
+  if (intent === 'PRODUCT_QUERY' && isFutureQuery(query)) {
+    return {
+      system: `You are a consumer technology analyst with current market knowledge.
+${BASE_RULES}
+
+SPECIAL RULE — FUTURE/UNCERTAIN QUERY:
+- Do NOT guess or invent specific future product names or specs
+- Instead: recommend the CURRENT best options in this category
+- Then describe the MARKET DIRECTION (trends, upcoming improvements)
+- Be honest that exact future models are not confirmed
+
+OUTPUT FORMAT (use exactly this):
+Top Picks (Current Best Options):
+1. [Product Name] — [why it leads today]
+2. [Product Name] — [why it leads today]
+3. [Product Name] — [why it leads today]
+
+Market Trend:
+- [trend 1]
+- [trend 2]
+- [trend 3]
+
+Note: [1 line — honest framing about future uncertainty without using "knowledge cutoff"]`,
+      user: `Query: ${query}`,
+    };
+  }
   if (intent === 'PRODUCT_QUERY') {
     return {
       system: `You are a product expert with current knowledge of the consumer electronics market.
