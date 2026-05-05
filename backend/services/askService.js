@@ -381,10 +381,8 @@ function parseStructuredResponse(text) {
 }
 
 // ── Post-Parse Validation + Quality Layer ────────────────────────────────────
-// Runs after parsing. Enforces correctness, deduplicates tokens, scores quality.
-// Does NOT silently hide model mistakes — logs every correction made.
 
-// Phrases that indicate a vague WHY field — options with these get flagged
+// Phrases that indicate a vague WHY field
 const VAGUE_WHY_PATTERNS = [
   /\bflagship.?level processor\b/i,
   /\bsmooth (and responsive |)performance\b/i,
@@ -396,85 +394,172 @@ const VAGUE_WHY_PATTERNS = [
   /\bseamless (performance|experience)\b/i,
   /\brobust (performance|build)\b/i,
   /\bimpressive (specs|performance|camera)\b/i,
+  /\bstrong (performance|build|camera)\b/i,
+  /\benhanced (performance|experience|camera)\b/i,
 ];
 
-// Real spec signals — a WHY field must contain at least one of these
+// Real spec signals — WHY must contain at least one
 const REAL_SPEC_RE = /\b(\d+\s*MP|\d+\s*Hz|\d+\s*GB|\d+\s*mAh|\d+\s*W|snapdragon|dimensity|helio|exynos|apple\s+[am]\d|rtx|gtx|radeon|intel\s+core|amd\s+ryzen|oled|amoled|lcd|ips|qhd|fhd|4k|uhd|~?\d+[\-–]\d+\s*h(our)?|ip6[78])/i;
 
-// Single-word brand names that should never appear as a full product name
+// Single-word brand names that are invalid as full product names
 const BARE_BRAND_RE = /^(apple|samsung|google|oneplus|xiaomi|vivo|oppo|realme|poco|motorola|nokia|sony|lg|huawei|honor|asus|dell|hp|lenovo|acer|msi|razer|microsoft|nothing)$/i;
 
-// Remove duplicate tokens from a string (e.g. "2026 2026" → "2026")
-function dedupeTokens(text) {
-  if (!text) return text;
-  // Adjacent duplicates
-  let t = text.replace(/\b(\w+)\s+\1\b/gi, '$1');
-  // Collapse extra spaces
-  return t.replace(/\s{2,}/g, ' ').trim();
+// Infer category from WHY field keywords — used when category is duplicate or missing
+function inferCategoryFromWhy(why) {
+  const w = (why || '').toLowerCase();
+  if (/\b(rtx|gtx|gpu|fps|gaming|frame rate|refresh rate.*\d+hz|\d+hz.*gaming)\b/.test(w)) return 'gaming';
+  if (/\b(\d+\s*mp|camera|photo|portrait|low.light|zoom|ois)\b/.test(w))                  return 'camera';
+  if (/\b(\d+\s*mah|battery|endurance|all.day|charging)\b/.test(w))                       return 'battery';
+  if (/\b(lightweight|portab|slim|thin|compact|weight)\b/.test(w))                        return 'portability';
+  if (/\b(ram|cpu|processor|core|multitask|productivity|work|develop)\b/.test(w))         return 'productivity';
+  if (/\b(price|budget|affordable|value|cheap|cost)\b/.test(w))                           return 'value';
+  if (/\b(creative|design|video edit|content creat|display.*color|color accuracy)\b/.test(w)) return 'creative';
+  return null; // cannot infer — caller handles
 }
 
-// Score a single option's quality (0–4). Options scoring < 2 are flagged.
+// Remove duplicate tokens from a string
+function dedupeTokens(text) {
+  if (!text) return text;
+  return text.replace(/\b(\w+)\s+\1\b/gi, '$1').replace(/\s{2,}/g, ' ').trim();
+}
+
+// Score a single option 0–4
 function scoreOption(opt) {
   let score = 0;
-  // +1 if name has at least 2 words and is not a bare brand
   if (opt.name && opt.name.trim().split(/\s+/).length >= 2 && !BARE_BRAND_RE.test(opt.name.trim())) score++;
-  // +1 if WHY contains a real spec signal
   if (opt.why && REAL_SPEC_RE.test(opt.why)) score++;
-  // +1 if WHY has no vague patterns
   if (opt.why && !VAGUE_WHY_PATTERNS.some((re) => re.test(opt.why))) score++;
-  // +1 if PICK_IF is specific (more than 4 words)
   if (opt.pickIf && opt.pickIf.trim().split(/\s+/).length >= 4) score++;
   return score;
 }
 
-// Validate and clean a parsed structured response
-function validateAndCleanStructured(parsed) {
-  if (!parsed) return parsed;
+// Compute average score across all options
+function avgScore(options) {
+  if (!options || options.length === 0) return 0;
+  return options.reduce((sum, o) => sum + (o._score || 0), 0) / options.length;
+}
 
+// Validate and clean a parsed structured response
+// Returns { cleaned, rejected, reasons }
+function validateAndCleanStructured(parsed) {
+  if (!parsed) return { cleaned: null, rejected: true, reasons: ['null input'] };
+
+  const reasons = [];
   const cleaned = {
-    intro: dedupeTokens(parsed.intro || ''),
+    intro:       dedupeTokens(parsed.intro || ''),
     decideLines: (parsed.decideLines || []).map(dedupeTokens).filter(Boolean),
-    options: [],
+    options:     [],
   };
 
   const usedCategories = new Set();
 
   for (const opt of (parsed.options || [])) {
-    const name     = dedupeTokens(opt.name    || '').trim();
-    const category = (opt.category || '').toLowerCase().trim();
-    const why      = dedupeTokens(opt.why     || '').trim();
-    const pickIf   = dedupeTokens(opt.pickIf  || '').trim();
+    const name   = dedupeTokens(opt.name   || '').trim();
+    const why    = dedupeTokens(opt.why    || '').trim();
+    const pickIf = dedupeTokens(opt.pickIf || '').trim();
+    let   category = (opt.category || '').toLowerCase().trim();
 
-    // Skip options with bare brand names
+    // Reject bare brand names
     if (BARE_BRAND_RE.test(name)) {
       console.warn(`[validate] Skipping bare brand name: "${name}"`);
+      reasons.push(`bare brand name: "${name}"`);
       continue;
     }
 
-    // Skip options with no real spec in WHY — log it
+    // Log missing real spec (keep option, flag for scoring)
     if (why && !REAL_SPEC_RE.test(why)) {
-      console.warn(`[validate] WHY field lacks real spec for "${name}": "${why.slice(0, 80)}"`);
-      // Keep it but mark as low-quality (don't silently drop — user still sees something)
+      console.warn(`[validate] No real spec in WHY for "${name}": "${why.slice(0, 80)}"`);
     }
 
-    // Deduplicate categories — if same category used twice, mark second as 'balanced'
-    let finalCategory = category;
-    if (usedCategories.has(category)) {
-      console.warn(`[validate] Duplicate category "${category}" for "${name}" — reassigning to "balanced"`);
-      finalCategory = 'balanced';
+    // Resolve duplicate or missing category — infer from WHY, never use "balanced"
+    if (!category || usedCategories.has(category)) {
+      const inferred = inferCategoryFromWhy(why);
+      if (inferred && !usedCategories.has(inferred)) {
+        console.warn(`[validate] Category "${category}" duplicate/missing for "${name}" — inferred "${inferred}"`);
+        category = inferred;
+      } else {
+        // Find any unused valid category as last resort
+        const fallbackCats = ['gaming','camera','battery','portability','productivity','value','creative','developer'];
+        const unused = fallbackCats.find((c) => !usedCategories.has(c));
+        category = unused || category || 'value';
+        console.warn(`[validate] Category reassigned to "${category}" for "${name}"`);
+      }
     }
-    usedCategories.add(finalCategory);
+    usedCategories.add(category);
 
     const score = scoreOption({ name, why, pickIf });
     console.log(`[quality] "${name}" score: ${score}/4`);
-
-    cleaned.options.push({ name, category: finalCategory, why, pickIf, _score: score });
+    cleaned.options.push({ name, category, why, pickIf, _score: score });
   }
 
-  // Sort by score descending so best options appear first
+  // Sort best options first
   cleaned.options.sort((a, b) => (b._score || 0) - (a._score || 0));
 
-  return cleaned;
+  // ── Hard rejection checks ─────────────────────────────────────────────────
+  const avg = avgScore(cleaned.options);
+  const noSpecCount = cleaned.options.filter((o) => !REAL_SPEC_RE.test(o.why || '')).length;
+  const hasBareNames = cleaned.options.some((o) => BARE_BRAND_RE.test(o.name.trim()));
+  const dupCategories = cleaned.options.length !== new Set(cleaned.options.map((o) => o.category)).size;
+
+  if (avg < 2.5)        reasons.push(`avg score ${avg.toFixed(1)} < 2.5`);
+  if (noSpecCount > 1)  reasons.push(`${noSpecCount} options lack real specs`);
+  if (hasBareNames)     reasons.push('bare brand names present after cleaning');
+  if (dupCategories)    reasons.push('duplicate categories remain');
+  if (cleaned.options.length < 2) reasons.push('fewer than 2 valid options');
+
+  const rejected = reasons.length > 0;
+  if (rejected) console.warn(`[reject] Low quality detected — reasons: ${reasons.join('; ')}`);
+
+  return { cleaned, rejected, reasons };
+}
+
+// ── Controlled Fallback ───────────────────────────────────────────────────────
+// Returns a safe structured response based on query category.
+// Uses real current products — never generic placeholders.
+
+function buildFallbackStructured(query) {
+  const q = query.toLowerCase();
+
+  if (/gaming.*laptop|laptop.*gaming/.test(q)) return {
+    intro: 'These are the top gaming laptops available right now.',
+    options: [
+      { name: 'ASUS ROG Zephyrus G14 (2025)', category: 'gaming',       why: 'AMD Ryzen 9 + RTX 4070, 165Hz QHD display, ~10h battery — best thermal efficiency in class.', pickIf: 'you want high FPS gaming with a portable build under 2kg.', _score: 4 },
+      { name: 'Razer Blade 15 (2024)',         category: 'productivity', why: 'Intel Core i9 + RTX 4080, 15.6-inch QHD 240Hz display, premium CNC aluminum chassis.', pickIf: 'you need a laptop for both 4K video editing and gaming.', _score: 4 },
+      { name: 'Lenovo Legion Pro 7i',          category: 'value',        why: 'Intel Core i9-13900HX + RTX 4080, 16-inch 240Hz IPS display at a competitive price point.', pickIf: 'you want flagship gaming performance without paying Razer prices.', _score: 4 },
+    ],
+    decideLines: ['Best portability → ASUS ROG Zephyrus G14 (2025)', 'Best display → Razer Blade 15 (2024)', 'Best value → Lenovo Legion Pro 7i'],
+  };
+
+  if (/laptop|notebook|macbook/.test(q)) return {
+    intro: 'These are the best laptops for everyday use and productivity in 2025.',
+    options: [
+      { name: 'Apple MacBook Air M3',       category: 'battery',      why: 'Apple M3 chip, 18h battery life, 13.6-inch Liquid Retina display — best battery in its class.', pickIf: 'you want all-day battery life with a lightweight build under 1.3kg.', _score: 4 },
+      { name: 'Dell XPS 15 (2025)',         category: 'productivity',  why: 'Intel Core i7-13700H, 16GB RAM, 15.6-inch 3.5K OLED display — ideal for developers and creators.', pickIf: 'you need a high-resolution display for coding or content creation.', _score: 4 },
+      { name: 'ASUS ZenBook 14 OLED',       category: 'portability',   why: 'AMD Ryzen 7 7730U, 14-inch 2.8K OLED display, weighs 1.39kg — best OLED display in portable form.', pickIf: 'you want an OLED display in a compact, travel-friendly laptop.', _score: 4 },
+    ],
+    decideLines: ['Best battery → Apple MacBook Air M3', 'Best display for work → Dell XPS 15 (2025)', 'Best portability → ASUS ZenBook 14 OLED'],
+  };
+
+  if (/phone|mobile|smartphone/.test(q)) return {
+    intro: 'These are the top smartphones to consider right now.',
+    options: [
+      { name: 'Samsung Galaxy S24 Ultra', category: 'camera',       why: '200MP primary camera, Snapdragon 8 Gen 3, 5000mAh battery with 45W charging — best zoom camera in Android.', pickIf: 'you want the best Android camera with S Pen support.', _score: 4 },
+      { name: 'Apple iPhone 15 Pro',      category: 'productivity',  why: 'A17 Pro chip, 48MP main camera, titanium build, USB-C 3.0 — fastest mobile chip available.', pickIf: 'you want the fastest chip and best app ecosystem.', _score: 4 },
+      { name: 'OnePlus 12',               category: 'value',         why: 'Snapdragon 8 Gen 3, 5400mAh battery, 100W SUPERVOOC charging, 6.82-inch 120Hz AMOLED.', pickIf: 'you want flagship specs with the fastest charging under ₹65k.', _score: 4 },
+    ],
+    decideLines: ['Best camera → Samsung Galaxy S24 Ultra', 'Best performance → Apple iPhone 15 Pro', 'Best value → OnePlus 12'],
+  };
+
+  // Generic fallback
+  return {
+    intro: 'Here are the top options based on your query.',
+    options: [
+      { name: 'Samsung Galaxy S24 Ultra', category: 'camera',      why: '200MP camera, Snapdragon 8 Gen 3, 5000mAh — top-ranked Android flagship.', pickIf: 'you want the best camera and performance in one device.', _score: 3 },
+      { name: 'Apple iPhone 15 Pro',      category: 'productivity', why: 'A17 Pro chip, titanium build, 48MP camera — fastest mobile processor available.', pickIf: 'you are in the Apple ecosystem and want the best performance.', _score: 3 },
+      { name: 'OnePlus 12',               category: 'value',        why: 'Snapdragon 8 Gen 3, 100W charging, 5400mAh — best specs-per-price in flagship tier.', pickIf: 'you want flagship performance without paying premium pricing.', _score: 3 },
+    ],
+    decideLines: ['Best camera → Samsung Galaxy S24 Ultra', 'Best performance → Apple iPhone 15 Pro', 'Best value → OnePlus 12'],
+  };
 }
 
 // ── Core Ask Function ─────────────────────────────────────────────────────────
@@ -483,22 +568,51 @@ export async function askAI(query) {
   const intent = detectIntent(query);
   const { system, user } = buildPrompt(query, intent);
 
-  const raw = await groqPost(
-    [
-      { role: 'system', content: system },
-      { role: 'user',   content: user   },
-    ],
-    0.35,
-    1024,
+  // ── Attempt 1: primary generation ────────────────────────────────────────
+  const raw1 = await groqPost(
+    [{ role: 'system', content: system }, { role: 'user', content: user }],
+    0.35, 1024,
   );
+  const answer1 = stripGenericPhrases(raw1);
 
-  const answer = stripGenericPhrases(raw);
-  // Parse → validate → clean. validateAndCleanStructured logs every correction
-  // so model mistakes are visible in server logs, not silently hidden.
-  const rawStructured = (intent !== 'INFORMATIONAL_QUERY')
-    ? parseStructuredResponse(answer)
-    : null;
-  const structured = rawStructured ? validateAndCleanStructured(rawStructured) : null;
+  let structured = null;
 
+  if (intent !== 'INFORMATIONAL_QUERY') {
+    const parsed1 = parseStructuredResponse(answer1);
+    const { cleaned: cleaned1, rejected: rejected1 } = parsed1
+      ? validateAndCleanStructured(parsed1)
+      : { cleaned: null, rejected: true };
+
+    if (!rejected1) {
+      // Attempt 1 passed — use it
+      structured = cleaned1;
+    } else {
+      // ── Attempt 2: retry with strict instruction ────────────────────────
+      console.log('[retry] Attempt 1 rejected — regenerating with strict instruction');
+      const retryUser = `${user}\n\nPREVIOUS OUTPUT WAS REJECTED FOR LOW QUALITY.\nYou MUST:\n- Use Brand + Model names (e.g. "Samsung Galaxy S24 Ultra" not "Samsung")\n- Include a real spec in every WHY field (chip, Hz, MP, mAh, GB)\n- Use PICK_IF: label (not _IF:)\n- Assign different categories to each option\nRegenerate now with strict adherence.`;
+
+      const raw2 = await groqPost(
+        [{ role: 'system', content: system }, { role: 'user', content: retryUser }],
+        0.2, 1024, // lower temperature for more deterministic output
+      );
+      const answer2 = stripGenericPhrases(raw2);
+      const parsed2 = parseStructuredResponse(answer2);
+      const { cleaned: cleaned2, rejected: rejected2 } = parsed2
+        ? validateAndCleanStructured(parsed2)
+        : { cleaned: null, rejected: true };
+
+      if (!rejected2) {
+        // Retry passed
+        structured = cleaned2;
+      } else {
+        // ── Fallback: use controlled safe output ──────────────────────────
+        console.log('[fallback] Both attempts rejected — using controlled fallback');
+        structured = buildFallbackStructured(query);
+      }
+    }
+  }
+
+  // Use the best available answer text (attempt 1 preferred for the raw text field)
+  const answer = answer1;
   return { answer, structured, type: intent };
 }
