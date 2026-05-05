@@ -67,3 +67,26 @@ export function getStoredUser() {
 export function storeUser(user) {
   localStorage.setItem('aeo_user', JSON.stringify(user));
 }
+
+/**
+ * Pure AI ask — returns a direct answer with no strategy wrapping.
+ * Use for informational, recommendation, and general queries.
+ * @param {string} query
+ * @returns {Promise<{ success: boolean, data: { answer: string, type: string } }>}
+ */
+export async function askQuery(query) {
+  const res = await fetch(`${API_BASE}/api/ask`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeader(),
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText}`);
+  }
+
+  return res.json();
+}
