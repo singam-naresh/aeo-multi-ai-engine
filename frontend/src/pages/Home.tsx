@@ -5,8 +5,8 @@ import SearchBar from '../components/SearchBar';
 import ModelCard from '../components/ModelCard';
 import ComparisonCard from '../components/ComparisonCard';
 import StrategyCard from '../components/StrategyCard';
-import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle, LogOut, User, Info } from 'lucide-react';
-import { analyzeQuery, getStoredUser, clearToken } from '../services/api.js';
+import { BrainCircuit, ShieldCheck, Globe, BarChart3, AlertCircle, LogOut, User, Info, Sparkles } from 'lucide-react';
+import { analyzeQuery, askQuery, getStoredUser, clearToken } from '../services/api.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +68,7 @@ export default function Home() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading]         = useState(false);
   const [result, setResult]               = useState<ApiData | null>(null);
+  const [aiAnswer, setAiAnswer]           = useState<{ answer: string; type: string } | null>(null);
   const [error, setError]                 = useState<string | null>(null);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -101,13 +102,29 @@ export default function Home() {
     if (!query.trim()) return;
     setIsLoading(true);
     setResult(null);
+    setAiAnswer(null);
     setError(null);
     setSelectedModel(null);
 
     try {
-      const response = await analyzeQuery(query.trim());
-      if (!response.success) throw new Error('Analysis failed. Please try again.');
-      setResult(response.data);
+      // Run both calls in parallel — /api/ask for direct answer, /api/analyze for strategy
+      const [askResponse, analyzeResponse] = await Promise.allSettled([
+        askQuery(query.trim()),
+        analyzeQuery(query.trim()),
+      ]);
+
+      // Direct AI answer
+      if (askResponse.status === 'fulfilled' && askResponse.value?.success) {
+        setAiAnswer(askResponse.value.data);
+      }
+
+      // Strategy data
+      if (analyzeResponse.status === 'fulfilled' && analyzeResponse.value?.success) {
+        setResult(analyzeResponse.value.data);
+      } else if (askResponse.status === 'rejected' && analyzeResponse.status === 'rejected') {
+        throw new Error('Analysis failed. Please try again.');
+      }
+
       setTimeout(() => {
         resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
@@ -270,11 +287,38 @@ export default function Home() {
         </AnimatePresence>
 
         {/* ── Results ── */}
-        {result && (
+        {(result || aiAnswer) && (
           <div ref={resultsRef} className="max-w-7xl mx-auto px-6 space-y-12 scroll-mt-32">
 
+            {/* ── AI Response block — always shown first ── */}
+            {aiAnswer && (
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="rounded-2xl border border-white/8 bg-card/40 backdrop-blur-xl overflow-hidden"
+              >
+                {/* Header */}
+                <div className="flex items-center gap-3 px-6 py-4 border-b border-white/5 bg-white/[0.02]">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center">
+                    <Sparkles size={16} className="text-white" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-widest text-purple-400">AI Response</p>
+                    <p className="text-[10px] text-muted-foreground capitalize">{aiAnswer.type} query</p>
+                  </div>
+                </div>
+                {/* Answer body */}
+                <div className="px-6 py-5">
+                  <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">
+                    {aiAnswer.answer}
+                  </p>
+                </div>
+              </motion.div>
+            )}
+
             {/* Informational query — no model data, show clean message */}
-            {!hasModelData && (
+            {result && !hasModelData && (
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -299,7 +343,7 @@ export default function Home() {
             )}
 
             {/* Strategy card — shown for all query types that have a finalStrategy */}
-            {result.finalStrategy && (
+            {result?.finalStrategy && (
               <StrategyCard
                 strategy={result.finalStrategy}
                 onKeywordClick={handleKeywordTrigger}
@@ -308,7 +352,7 @@ export default function Home() {
             )}
 
             {/* Model cards + Comparison — only when full model data is present */}
-            {hasModelData && bestKey && result.groq && result.gpt && result.gemini && (
+            {result && hasModelData && bestKey && result.groq && result.gpt && result.gemini && (
               <>
                 {/* Model Cards */}
                 <div className="space-y-4">
