@@ -303,7 +303,11 @@ function parseStructuredResponse(text) {
 
   for (const line of lines) {
     // ── Strip leading list markers the AI sometimes adds (1. 2. •) ──────────
-    const clean = line.replace(/^[\d]+\.\s*/, '').replace(/^[-•*]\s*/, '');
+    // Also normalise _IF: → PICK_IF: (model sometimes drops the PICK prefix)
+    const clean = line
+      .replace(/^[\d]+\.\s*/, '')
+      .replace(/^[-•*]\s*/, '')
+      .replace(/^_IF:/i, 'PICK_IF:');
 
     // ── Label matching — tolerant of spacing and old label variants ──────────
     const labelMatch = clean.match(/^([A-Z][A-Z_ ]{1,12}):\s*(.*)/);
@@ -322,7 +326,6 @@ function parseStructuredResponse(text) {
       lastField = 'name';
 
     } else if ((label === 'CATEGORY' || label === 'BEST_FOR') && current) {
-      // Accept both CATEGORY: and legacy BEST FOR: / BEST_FOR:
       current.category = value || '';
       lastField = 'category';
 
@@ -330,8 +333,8 @@ function parseStructuredResponse(text) {
       current.why = value || '';
       lastField = 'why';
 
-    } else if ((label === 'PICK_IF' || label === 'PICK_IF' || label === 'PICK') && current) {
-      // Accept PICK_IF:, PICK IF:, PICK:
+    } else if ((label === 'PICK_IF' || label === 'PICK' || label === 'IF') && current) {
+      // Accept PICK_IF:, PICK:, IF: — all map to pickIf
       current.pickIf = value || '';
       lastField = 'pickIf';
 
