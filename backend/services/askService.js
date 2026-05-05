@@ -2,6 +2,7 @@
 import {
   validateAndCleanStructured,
   buildDynamicFallback,
+  detectBrandConstraint,
 } from './qualityEngine.js';
 
 const GROQ_API_URL   = 'https://api.groq.com/openai/v1/chat/completions';
@@ -391,6 +392,10 @@ export async function askAI(query) {
   const intent = detectIntent(query);
   const { system, user } = buildPrompt(query, intent);
 
+  // Detect brand constraint — if query mentions a specific brand, all options must match
+  const constraint = detectBrandConstraint(query);
+  if (constraint) console.log(`[brand] Constraint detected: "${constraint.brand}"`);
+
   let structured      = null;
   let confidenceScore = 100;
 
@@ -401,17 +406,20 @@ export async function askAI(query) {
   if (intent !== 'INFORMATIONAL_QUERY') {
     const parsed1 = parseStructuredResponse(answer1);
     const result1 = parsed1
-      ? validateAndCleanStructured(parsed1)
+      ? validateAndCleanStructured(parsed1, constraint)
       : { cleaned: null, rejected: true, reasons: ['parse failed'], perOptionIssues: [] };
 
     if (!result1.rejected) {
-      // Attempt 1 passed
       structured = result1.cleaned;
     } else {
       // ── Attempt 2: targeted retry with exact issue list ─────────────────
       confidenceScore -= 20;
       const allIssues = [...(result1.reasons || []), ...(result1.perOptionIssues || [])].filter(Boolean);
       console.log(`[retry] Attempt 1 rejected. Issues:\n  ${allIssues.join('\n  ')}`);
+
+      const brandRule = constraint
+        ? `\n- ALL options MUST be ${constraint.brand.toUpperCase()} products — no other brands allowed`
+        : '';
 
       const retryUser = `${user}
 
@@ -423,7 +431,7 @@ MANDATORY FIXES:
 - Real spec in every WHY: chip name, Hz, MP, mAh, GB, or GPU model
 - Label must be PICK_IF: — never _IF: or IF:
 - Each option must have a DIFFERENT category
-- No vague phrases: "great performance", "powerful processor", "high-quality images"
+- No vague phrases: "great performance", "powerful processor", "high-quality images"${brandRule}
 
 Regenerate the complete response now.`;
 
@@ -431,18 +439,16 @@ Regenerate the complete response now.`;
       const answer2 = stripGenericPhrases(raw2);
       const parsed2 = parseStructuredResponse(answer2);
       const result2 = parsed2
-        ? validateAndCleanStructured(parsed2)
+        ? validateAndCleanStructured(parsed2, constraint)
         : { cleaned: null, rejected: true, reasons: ['parse failed'], perOptionIssues: [] };
 
       if (!result2.rejected) {
-        // Retry passed
         structured = result2.cleaned;
         confidenceScore -= 10;
       } else {
-        // ── Dynamic fallback ──────────────────────────────────────────────
         console.log(`[fallback] Retry rejected: ${(result2.reasons || []).join('; ')}`);
         confidenceScore -= 40;
-        structured = await buildDynamicFallback(query, system, groqPost, parseStructuredResponse, stripGenericPhrases);
+        structured = await buildDynamicFallback(query, system, groqPost, parseStructuredResponse, stripGenericPhrases, constraint);
       }
     }
   }

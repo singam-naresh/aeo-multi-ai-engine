@@ -26,7 +26,62 @@ export const REAL_SPEC_RE = /\b(\d+\s*MP|\d+\s*Hz|\d+\s*GB|\d+\s*mAh|\d+\s*W|sna
 // Single-word brand names — invalid as full product names
 export const BARE_BRAND_RE = /^(apple|samsung|google|oneplus|xiaomi|vivo|oppo|realme|poco|motorola|nokia|sony|lg|huawei|honor|asus|dell|hp|lenovo|acer|msi|razer|microsoft|nothing|iqoo|tecno|infinix|lava)$/i;
 
-// ── Factual sanity — catches obvious hallucinations ───────────────────────────
+// ── Brand Constraint Detection ────────────────────────────────────────────────
+// Maps query keywords to brand identifiers and their name patterns.
+// Used to enforce that all options belong to the queried brand.
+
+const BRAND_CONSTRAINT_MAP = [
+  { keywords: /\bvivo\b/i,       brand: 'vivo',       namePattern: /\bvivo\b/i,       seeds: 'Vivo V30 Pro, Vivo X90 Pro, Vivo iQOO 12 Pro, Vivo V29 Pro, Vivo T3 Pro' },
+  { keywords: /\biqoo\b/i,       brand: 'iqoo',       namePattern: /\biqoo\b/i,        seeds: 'Vivo iQOO 12 Pro, Vivo iQOO Neo 9 Pro, Vivo iQOO Z9 Pro, Vivo iQOO 11 Pro, Vivo iQOO Z8' },
+  { keywords: /\bsamsung\b/i,    brand: 'samsung',    namePattern: /\bsamsung\b/i,     seeds: 'Samsung Galaxy S24 Ultra, Samsung Galaxy S24+, Samsung Galaxy A55, Samsung Galaxy M55, Samsung Galaxy F55' },
+  { keywords: /\biphone\b|\bapple\s+phone\b/i, brand: 'apple', namePattern: /\biphone\b|\bapple\b/i, seeds: 'Apple iPhone 15 Pro Max, Apple iPhone 15 Pro, Apple iPhone 15, Apple iPhone 15 Plus, Apple iPhone 14' },
+  { keywords: /\bgoogle\s+pixel\b|\bpixel\s+phone\b/i, brand: 'pixel', namePattern: /\bpixel\b|\bgoogle\b/i, seeds: 'Google Pixel 9 Pro XL, Google Pixel 9 Pro, Google Pixel 9, Google Pixel 8a, Google Pixel 8 Pro' },
+  { keywords: /\boneplus\b/i,    brand: 'oneplus',    namePattern: /\boneplus\b/i,     seeds: 'OnePlus 12, OnePlus 12R, OnePlus Nord CE 4, OnePlus Nord 4, OnePlus Open' },
+  { keywords: /\bxiaomi\b/i,     brand: 'xiaomi',     namePattern: /\bxiaomi\b/i,      seeds: 'Xiaomi 14 Ultra, Xiaomi 14, Xiaomi 13T Pro, Xiaomi Redmi Note 13 Pro+, Xiaomi POCO F6 Pro' },
+  { keywords: /\boppo\b/i,       brand: 'oppo',       namePattern: /\boppo\b/i,        seeds: 'OPPO Find X7 Ultra, OPPO Reno 12 Pro, OPPO A3 Pro, OPPO F25 Pro, OPPO K12' },
+  { keywords: /\brealme\b/i,     brand: 'realme',     namePattern: /\brealme\b/i,      seeds: 'Realme GT 6, Realme 12 Pro+, Realme Narzo 70 Pro, Realme P1 Pro, Realme C65' },
+  { keywords: /\bpoco\b/i,       brand: 'poco',       namePattern: /\bpoco\b/i,        seeds: 'POCO F6 Pro, POCO X6 Pro, POCO M6 Pro, POCO F6, POCO C65' },
+  { keywords: /\bmotorola\b|\bmoto\b/i, brand: 'motorola', namePattern: /\bmotorola\b|\bmoto\b/i, seeds: 'Motorola Edge 50 Ultra, Motorola Edge 50 Pro, Motorola Moto G85, Motorola Razr 50 Ultra, Motorola Edge 50 Fusion' },
+  { keywords: /\bnokia\b/i,      brand: 'nokia',      namePattern: /\bnokia\b/i,       seeds: 'Nokia G42 5G, Nokia C32, Nokia G21, Nokia X30, Nokia G60' },
+  { keywords: /\bnothing\b/i,    brand: 'nothing',    namePattern: /\bnothing\b/i,     seeds: 'Nothing Phone (2a), Nothing Phone (2), Nothing Phone (1), Nothing CMF Phone 1' },
+  { keywords: /\basus\s+(rog|zephyrus|tuf|zenbook|vivobook)\b/i, brand: 'asus', namePattern: /\basus\b/i, seeds: 'ASUS ROG Zephyrus G14 (2025), ASUS ROG Strix G16, ASUS TUF Gaming A15, ASUS ZenBook 14 OLED, ASUS Vivobook 16X' },
+  { keywords: /\bdell\b/i,       brand: 'dell',       namePattern: /\bdell\b/i,        seeds: 'Dell XPS 15 (2025), Dell XPS 13 Plus, Dell Inspiron 16 Plus, Dell Alienware M18, Dell Latitude 9440' },
+  { keywords: /\blenovo\b/i,     brand: 'lenovo',     namePattern: /\blenovo\b/i,      seeds: 'Lenovo ThinkPad X1 Carbon Gen 12, Lenovo Legion Pro 7i, Lenovo IdeaPad Slim 5, Lenovo Yoga 9i, Lenovo Legion 5 Pro' },
+  { keywords: /\bhp\b/i,         brand: 'hp',         namePattern: /\bhp\b/i,          seeds: 'HP Spectre x360 14, HP EliteBook 840 G10, HP Pavilion 15, HP Omen 16, HP Envy 16' },
+  { keywords: /\brazer\b/i,      brand: 'razer',      namePattern: /\brazer\b/i,       seeds: 'Razer Blade 15 (2024), Razer Blade 16, Razer Blade 14, Razer Blade 18, Razer Blade Stealth 13' },
+  { keywords: /\bmsi\b/i,        brand: 'msi',        namePattern: /\bmsi\b/i,         seeds: 'MSI Stealth 16 Studio, MSI Raider GE78 HX, MSI Titan GT77 HX, MSI Katana 15, MSI Prestige 16' },
+];
+
+/**
+ * Detect if the query constrains output to a specific brand.
+ * Returns { brand, namePattern, seeds } or null if no constraint.
+ */
+export function detectBrandConstraint(query) {
+  const q = query.toLowerCase();
+  for (const entry of BRAND_CONSTRAINT_MAP) {
+    if (entry.keywords.test(q)) {
+      return { brand: entry.brand, namePattern: entry.namePattern, seeds: entry.seeds };
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if all options satisfy the brand constraint.
+ * Returns array of violation strings (empty = all good).
+ */
+export function checkBrandConstraint(options, constraint) {
+  if (!constraint) return [];
+  const violations = [];
+  for (const opt of options) {
+    if (!constraint.namePattern.test(opt.name || '')) {
+      violations.push(`Option "${opt.name}" violates brand constraint — query requires ${constraint.brand} products only`);
+    }
+  }
+  return violations;
+}
+
+
 export function hasFakeSpecs(why, name) {
   const w = (why  || '').toLowerCase();
   const n = (name || '').toLowerCase();
@@ -121,7 +176,7 @@ export function checkDifferentiation(options) {
 
 // ── Full validate + clean ─────────────────────────────────────────────────────
 // Returns { cleaned, rejected, reasons, perOptionIssues }
-export function validateAndCleanStructured(parsed) {
+export function validateAndCleanStructured(parsed, constraint = null) {
   if (!parsed) return { cleaned: null, rejected: true, reasons: ['null input'], perOptionIssues: [] };
 
   const allReasons      = [];
@@ -180,6 +235,15 @@ export function validateAndCleanStructured(parsed) {
   if (cleaned.options.length < 2) allReasons.push('fewer than 2 valid options');
   if (diffIssues.length > 2)      allReasons.push(`use-case overlap: ${diffIssues.slice(0,2).join('; ')}`);
 
+  // ── Brand constraint check ────────────────────────────────────────────────
+  if (constraint) {
+    const brandViolations = checkBrandConstraint(cleaned.options, constraint);
+    if (brandViolations.length > 0) {
+      console.warn(`[brand] Constraint violation for "${constraint.brand}": ${brandViolations.join('; ')}`);
+      allReasons.push(...brandViolations);
+    }
+  }
+
   const rejected = allReasons.length > 0;
   if (rejected) console.warn(`[reject] ${allReasons.join(' | ')}`);
 
@@ -190,11 +254,15 @@ export function validateAndCleanStructured(parsed) {
 // Asks the AI to generate a fallback with explicit seed product names.
 // Falls back to static only if the AI call itself fails.
 
-export async function buildDynamicFallback(query, system, groqPost, parseStructuredResponse, stripGenericPhrases) {
+export async function buildDynamicFallback(query, system, groqPost, parseStructuredResponse, stripGenericPhrases, constraint = null) {
   const q = query.toLowerCase();
 
+  // Brand-constrained seed — use brand-specific products if constraint detected
   let seedProducts;
-  if (/gaming.*laptop|laptop.*gaming/.test(q))
+  if (constraint) {
+    seedProducts = constraint.seeds;
+    console.log(`[fallback] Brand constraint active: "${constraint.brand}" — using brand seeds`);
+  } else if (/gaming.*laptop|laptop.*gaming/.test(q))
     seedProducts = 'ASUS ROG Zephyrus G14 (2025), Razer Blade 15 (2024), Lenovo Legion Pro 7i (2024), MSI Stealth 16 Studio, Acer Predator Helios 18';
   else if (/laptop|notebook|macbook/.test(q))
     seedProducts = 'Apple MacBook Air M3, Dell XPS 15 (2025), ASUS ZenBook 14 OLED, Lenovo ThinkPad X1 Carbon Gen 12, HP Spectre x360 14';
@@ -207,10 +275,14 @@ export async function buildDynamicFallback(query, system, groqPost, parseStructu
   else
     seedProducts = 'Samsung Galaxy S24 Ultra, Apple iPhone 15 Pro, OnePlus 12, Google Pixel 9 Pro, Xiaomi 14 Ultra';
 
+  const brandInstruction = constraint
+    ? `\nCRITICAL: ALL options MUST be ${constraint.brand.toUpperCase()} products only. Do NOT include any other brand.`
+    : '';
+
   const fallbackUser = `Query: ${query}
 
 FALLBACK GENERATION — use ONLY these product names (pick 3 most relevant):
-${seedProducts}
+${seedProducts}${brandInstruction}
 
 For each:
 OPTION: [exact name from list]
@@ -224,7 +296,7 @@ DECIDE: [3 lines: use-case → product]`;
     const raw    = await groqPost([{ role: 'system', content: system }, { role: 'user', content: fallbackUser }], 0.15, 800);
     const parsed = parseStructuredResponse(stripGenericPhrases(raw));
     if (parsed && parsed.options && parsed.options.length >= 2) {
-      const { cleaned, rejected } = validateAndCleanStructured(parsed);
+      const { cleaned, rejected } = validateAndCleanStructured(parsed, constraint);
       if (!rejected) {
         console.log('[fallback] Dynamic fallback passed validation');
         return cleaned;
