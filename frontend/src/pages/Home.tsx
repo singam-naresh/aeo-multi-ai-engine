@@ -42,6 +42,19 @@ interface ApiData {
   finalStrategy: FinalStrategy;
 }
 
+interface StructuredOption {
+  name: string;
+  category: string;
+  why: string;
+  pickIf: string;
+}
+
+interface StructuredResponse {
+  intro: string;
+  options: StructuredOption[];
+  decideLines: string[];
+}
+
 // ── Loading messages ──────────────────────────────────────────────────────────
 
 const LOADING_MESSAGES = [
@@ -62,13 +75,139 @@ function toModelCardProps(name: string, model: ModelResult) {
   };
 }
 
+// Strip any template headers that slip through from the AI response
+function cleanAiText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/top picks?\s*[\(\[]?current\s+best\s+options?[\)\]]?\s*:?\s*/gi, '')
+    .replace(/top picks?\s*:?\s*/gi, '')
+    .replace(/top platforms?\s*:?\s*/gi, '')
+    .replace(/market direction\s*:?\s*/gi, '')
+    .replace(/best for\s*:?\s*/gi, '')
+    .replace(/here are the\s+(best|top)[^:\n]*:\s*/gi, '')
+    .replace(/as of (my knowledge cutoff|now|today|\d{4})[,.]?\s*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// ── Structured AI Response Renderer ──────────────────────────────────────────
+
+function intentLabel(type: string): string {
+  if (type === 'PRODUCT_QUERY')     return 'product recommendation';
+  if (type === 'PLATFORM_QUERY')    return 'platform comparison';
+  if (type === 'INFORMATIONAL_QUERY') return 'informational';
+  return type.toLowerCase().replace(/_/g, ' ');
+}
+
+const OPTION_ACCENT = [
+  'from-purple-500/20 to-blue-500/10 border-purple-500/30',
+  'from-blue-500/15 to-purple-500/10 border-blue-500/25',
+  'from-emerald-500/15 to-blue-500/10 border-emerald-500/25',
+  'from-amber-500/15 to-orange-500/10 border-amber-500/25',
+  'from-pink-500/15 to-purple-500/10 border-pink-500/25',
+];
+
+// Map category label → accent color for the badge
+const CATEGORY_COLOR: Record<string, string> = {
+  gaming:        'bg-red-500/20 text-red-300 border-red-500/30',
+  productivity:  'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  developer:     'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+  battery:       'bg-green-500/20 text-green-300 border-green-500/30',
+  camera:        'bg-pink-500/20 text-pink-300 border-pink-500/30',
+  portability:   'bg-amber-500/20 text-amber-300 border-amber-500/30',
+  value:         'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  balanced:      'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  creative:      'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30',
+  automation:    'bg-orange-500/20 text-orange-300 border-orange-500/30',
+  collaboration: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+  analytics:     'bg-violet-500/20 text-violet-300 border-violet-500/30',
+};
+
+function categoryBadgeClass(category: string): string {
+  const key = category.toLowerCase().trim();
+  return CATEGORY_COLOR[key] ?? 'bg-white/10 text-white/60 border-white/15';
+}
+
+function StructuredAiResponse({ data }: { data: { answer: string; structured: StructuredResponse | null; type: string } }) {
+  const { structured, answer, type } = data;
+
+  // ── Fallback: no structured data — render cleaned plain text ─────────────
+  // Handles: parse failure, informational queries, or unexpected AI output format.
+  if (!structured || structured.options.length === 0) {
+    const cleaned = cleanAiText(answer || '');
+    if (!cleaned) return null;
+    return (
+      <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">
+        {cleaned}
+      </p>
+    );
+  }
+
+  const { intro, options, decideLines } = structured;
+
+  return (
+    <div className="space-y-5">
+      {/* Intro line */}
+      {intro && (
+        <p className="text-base font-semibold text-white/90 leading-snug">{intro}</p>
+      )}
+
+      {/* Option cards */}
+      <div className="space-y-3">
+        {options.map((opt, i) => (
+          <div
+            key={i}
+            className={`rounded-xl p-5 bg-gradient-to-br border ${OPTION_ACCENT[i % OPTION_ACCENT.length]}`}
+          >
+            {/* Name + category badge */}
+            <div className="flex flex-wrap items-baseline gap-2 mb-2">
+              <span className="text-base font-bold text-white">{opt.name}</span>
+              {opt.category && (
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border uppercase tracking-wide ${categoryBadgeClass(opt.category)}`}>
+                  {opt.category}
+                </span>
+              )}
+            </div>
+            {/* Why */}
+            {opt.why && (
+              <p className="text-sm text-white/75 leading-relaxed mb-2">{opt.why}</p>
+            )}
+            {/* Pick if */}
+            {opt.pickIf && (
+              <p className="text-xs font-semibold text-white/50">
+                <span className="text-white/30 mr-1">Pick if:</span>{opt.pickIf}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Decision guide */}
+      {decideLines.length > 0 && (
+        <div className="rounded-xl p-5 bg-white/[0.03] border border-white/8">
+          <p className="text-xs font-bold uppercase tracking-widest text-purple-400 mb-3">
+            Which one should you pick?
+          </p>
+          <ul className="space-y-1.5">
+            {decideLines.map((line, i) => (
+              <li key={i} className="text-sm text-white/80 leading-relaxed">
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading]         = useState(false);
   const [result, setResult]               = useState<ApiData | null>(null);
-  const [aiAnswer, setAiAnswer]           = useState<{ answer: string; type: string } | null>(null);
+  const [aiAnswer, setAiAnswer]           = useState<{ answer: string; structured: StructuredResponse | null; type: string } | null>(null);
   const [error, setError]                 = useState<string | null>(null);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -113,9 +252,16 @@ export default function Home() {
         analyzeQuery(query.trim()),
       ]);
 
-      // Direct AI answer
+      // Direct AI answer — set regardless of analyzeResponse outcome
       if (askResponse.status === 'fulfilled' && askResponse.value?.success) {
         setAiAnswer(askResponse.value.data);
+      } else if (askResponse.status === 'rejected' || !askResponse.value?.success) {
+        // Ask failed — synthesise a minimal aiAnswer so the block still renders
+        // with whatever analyzeResponse has, or a safe fallback message
+        const fallbackAnswer = analyzeResponse.status === 'fulfilled' && analyzeResponse.value?.success
+          ? null  // analyzeResponse will cover the UI — no need to force aiAnswer
+          : null; // both failed — error thrown below
+        if (fallbackAnswer !== undefined) setAiAnswer(fallbackAnswer);
       }
 
       // Strategy data
@@ -291,7 +437,7 @@ export default function Home() {
           <div ref={resultsRef} className="max-w-7xl mx-auto px-6 space-y-12 scroll-mt-32">
 
             {/* ── AI Response block — always shown first ── */}
-            {aiAnswer && (
+            {aiAnswer && (aiAnswer.structured || aiAnswer.answer) && (
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -305,14 +451,12 @@ export default function Home() {
                   </div>
                   <div>
                     <p className="text-xs font-bold uppercase tracking-widest text-purple-400">AI Response</p>
-                    <p className="text-[10px] text-muted-foreground capitalize">{aiAnswer.type} query</p>
+                    <p className="text-[10px] text-muted-foreground capitalize">{intentLabel(aiAnswer.type)}</p>
                   </div>
                 </div>
                 {/* Answer body */}
                 <div className="px-6 py-5">
-                  <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">
-                    {aiAnswer.answer}
-                  </p>
+                  <StructuredAiResponse data={aiAnswer} />
                 </div>
               </motion.div>
             )}
