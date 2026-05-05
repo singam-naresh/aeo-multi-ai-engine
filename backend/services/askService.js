@@ -81,46 +81,52 @@ function buildPrompt(query, intent) {
 ${BASE_RULES}
 
 SPECIAL RULE — FUTURE/UNCERTAIN QUERY:
-- Do NOT guess or invent specific future product names or specs
-- Instead: recommend the CURRENT best options in this category
+- Use SERIES language: "Samsung Galaxy S24 series", "latest iPhone Pro models", "latest Pixel flagship"
+- Do NOT invent specific future model names or specs
+- Recommend the CURRENT best options in this category confidently
 - Then describe the MARKET DIRECTION (trends, upcoming improvements)
-- Be honest that exact future models are not confirmed
+- Be direct and practical — no over-explanation
 
 OUTPUT FORMAT (use exactly this):
 Top Picks (Current Best Options):
-1. [Product Name] — [why it leads today]
-2. [Product Name] — [why it leads today]
-3. [Product Name] — [why it leads today]
+1. [Product / Series Name] — [why it leads today]
+2. [Product / Series Name] — [why it leads today]
+3. [Product / Series Name] — [why it leads today]
 
-Market Trend:
+Market Direction:
 - [trend 1]
 - [trend 2]
-- [trend 3]
-
-Note: [1 line — honest framing about future uncertainty without using "knowledge cutoff"]`,
+- [trend 3]`,
       user: `Query: ${query}`,
     };
   }
   if (intent === 'PRODUCT_QUERY') {
     return {
-      system: `You are a product expert with current knowledge of the consumer electronics market.
+      system: `You are a consumer technology expert with current market knowledge.
 ${BASE_RULES}
 
 ADDITIONAL RULES FOR PRODUCT QUERIES:
+- Use SERIES language, not specific outdated model numbers:
+  ✅ "Samsung Galaxy S24 series" NOT "Samsung Galaxy S23"
+  ✅ "latest iPhone Pro models" NOT "iPhone 14"
+  ✅ "latest Pixel flagship" NOT "Pixel 7"
+  ✅ "OnePlus latest flagship" NOT "OnePlus 11"
 - Give TOP 3–5 CURRENT and RELEVANT items only
-- Avoid outdated models (anything more than 2–3 years old)
-- Prefer the latest series and active product lines
-- Include a specific reason WHY each is recommended (performance, battery, camera, value, etc.)
-- NEVER mix categories (do not suggest games, apps, or services for hardware queries)
+- Include a SPECIFIC reason per item (performance, camera, battery, value, etc.)
+- NEVER mix categories (no games, apps, or services for hardware queries)
 - Do NOT include fake pricing — omit price if unsure
+- End with a short Market Direction section (3 bullet points max)
 
 OUTPUT FORMAT (use exactly this):
 Top Picks:
-1. [Product Name] — [specific reason]
-2. [Product Name] — [specific reason]
-3. [Product Name] — [specific reason]
+1. [Product / Series Name] — [specific reason]
+2. [Product / Series Name] — [specific reason]
+3. [Product / Series Name] — [specific reason]
 
-Summary: [1–2 lines on who should buy what]`,
+Market Direction:
+- [trend 1]
+- [trend 2]
+- [trend 3]`,
       user: `Query: ${query}`,
     };
   }
