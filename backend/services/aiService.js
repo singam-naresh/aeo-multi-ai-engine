@@ -2266,21 +2266,21 @@ function classifyQuery(query) {
 function detectSegment(query) {
   const q = query.toLowerCase();
 
-  // Numeric price: "under 20000", "below 15k", "20k", bare 5-digit number
+  // Numeric price: "under 20000", "below 15k", bare 5-digit number
   const numMatch = q.match(/(?:under|below|less\s+than)?\s?(\d{4,6})/);
   if (numMatch) {
     const value = parseInt(numMatch[1], 10);
-    if (value <= 30000) return 'budget';    // ≤30k = budget (Indian market)
-    if (value <= 60000) return 'midrange';  // 30k–60k = mid-range
-    return 'premium';
+    if (value <= 30000) return 'budget';   // ≤30k  = budget  (Indian market)
+    if (value <= 80000) return 'midrange'; // 30k–80k = mid-range
+    return 'premium';                      // >80k  = premium
   }
 
-  // "20k" shorthand
+  // "20k" / "50k" shorthand
   const kMatch = q.match(/(\d{1,3})k\b/);
   if (kMatch) {
     const value = parseInt(kMatch[1], 10) * 1000;
     if (value <= 30000) return 'budget';
-    if (value <= 60000) return 'midrange';
+    if (value <= 80000) return 'midrange';
     return 'premium';
   }
 
@@ -2350,6 +2350,60 @@ function applyQueryIntelligence(strategy, type, segment, groqResult) {
   if (type === 'platform') {
     s.positioning = 'Platform designed for fast discovery, filtering, and user experience.';
     s.quickWin    = 'Reduce friction in onboarding and core action flow.';
+  }
+
+  return s;
+}
+
+/**
+ * Final output sanitizer — removes hallucinated entities, truncates long text,
+ * and injects rule-based competitor sets per segment.
+ */
+function cleanStrategy(strategy, queryType, segment) {
+  if (!strategy) return strategy;
+  const s = strategy;
+
+  if (queryType === 'product') {
+    // ── Remove irrelevant / hallucinated product mentions ─────────────
+    const INVALID_PATTERNS = [
+      /google pixel 4a/i,
+      /random product/i,
+      /irrelevant/i,
+      /saas/i,
+      /onboarding flow/i,
+      /user acquisition/i,
+      /platform (positioning|strategy)/i,
+    ];
+
+    for (const pattern of INVALID_PATTERNS) {
+      if (pattern.test(s.recommendedAction || '')) {
+        s.recommendedAction = 'Focus on clear differentiation using performance, pricing, and user experience.';
+        break;
+      }
+    }
+
+    // ── Truncate recommendedAction to 120 chars max ───────────────────
+    if (s.recommendedAction && s.recommendedAction.length > 120) {
+      s.recommendedAction = s.recommendedAction.slice(0, 120).replace(/\s+\S*$/, '') + '.';
+    }
+
+    // ── Rule-based competitor sets per segment ────────────────────────
+    if (segment === 'budget') {
+      s.topRankings = ['Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
+    } else if (segment === 'midrange') {
+      s.topRankings = ['Samsung Galaxy A series', 'OnePlus Nord series', 'iQOO Neo series'];
+    } else if (segment === 'premium') {
+      s.topRankings = ['iPhone Pro series', 'Samsung Galaxy S series', 'Google Pixel series'];
+    }
+
+    // ── Remove SaaS / platform terms from product output ─────────────
+    const SAAS_TERMS = /\b(saas|onboarding|user acquisition|platform strategy|subscription tier)\b/i;
+    if (SAAS_TERMS.test(s.positioning || '')) {
+      s.positioning = 'Device optimized for performance, value, and user satisfaction.';
+    }
+    if (SAAS_TERMS.test(s.priceStrategy || '')) {
+      s.priceStrategy = 'Price competitively and justify with specs, reviews, and real-world performance.';
+    }
   }
 
   return s;
@@ -2543,7 +2597,11 @@ export async function analyzeWithMultipleModels(query) {
   });
 
   // ── FINAL SANITY LAYER — unified query intelligence ──────────────────────
-  const strategy = applyQueryIntelligence(finalStrategy || {}, queryType, segment, groqResult);
+  const strategy = cleanStrategy(
+    applyQueryIntelligence(finalStrategy || {}, queryType, segment, groqResult),
+    queryType,
+    segment,
+  );
 
   const result = {
     groq:   repairModel(groqResult),
