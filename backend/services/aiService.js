@@ -2234,37 +2234,131 @@ function guardStrategy(candidates, primaryIntent) {
 
 // ─── Query Intent Router ──────────────────────────────────────────────────────
 
-function detectQueryType(query) {
+// ─── Unified Query Intelligence Layer ────────────────────────────────────────
+
+/**
+ * Classify query into: 'platform' | 'product' | 'informational'
+ * Platform takes priority. Product uses both device terms AND intent signals.
+ */
+function classifyQuery(query) {
   const q = query.toLowerCase();
-  // Platform — job/career/hiring intent
-  if (/\bjob(s)?\b|\bcareer(s)?\b|\bresume\b|\bhiring\b|\brecruit|\binternship\b/.test(q))
+
+  // PLATFORM — job/career/hiring intent
+  if (/\b(job|career|resume|hiring|internship|recruit)\b/.test(q))
     return 'platform';
-  // Product — physical goods, specs, pricing, device comparisons
-  if (/\blaptop(s)?\b|\bmobile\b|\bphone(s)?\b|\bsmartphone\b|\bac\b|\btv\b|\bunder\b|\bbudget\b|\bprice\b|\bspecs?\b|\bgaming\b|\bheadphone|\bearbuds?\b|\btablet\b|\bwatch\b|\bcamera\b|\bssd\b|\bgpu\b|\bram\b/.test(q))
+
+  // PRODUCT — device terms OR strong purchase/comparison intent
+  if (
+    /\b(laptop|mobile|phone|smartphone|ac|tv|headphone|earbuds|tablet|watch|camera|ssd|gpu|ram|gaming)\b/.test(q) ||
+    /\b(buy|under|budget|price|specs|review|comparison)\b/.test(q) ||
+    (/\b(best|top)\b/.test(q) && /\b(laptop|mobile|phone|smartphone|headphone|earbuds|tablet|camera|gaming|device|gadget)\b/.test(q))
+  )
     return 'product';
-  // Informational — general knowledge, people, places, facts, rankings
+
+  // DEFAULT — general knowledge, people, places, facts
   return 'informational';
 }
 
-// Extract price constraint from query.
-// Returns a number (e.g. 20000), 'budget', 'premium', or null.
-function extractBudget(query) {
+/**
+ * Detect price segment from query.
+ * Returns: 'budget' | 'midrange' | 'premium' | 'general'
+ */
+function detectSegment(query) {
   const q = query.toLowerCase();
-  // Numeric constraint: "under 20000", "below 15k", "less than 30000"
-  const match = q.match(/(?:under|below|less\s+than)\s?(\d{3,6})/);
-  if (match) return parseInt(match[1], 10);
+
+  // Numeric price: "under 20000", "below 15k", "20k", bare 5-digit number
+  const numMatch = q.match(/(?:under|below|less\s+than)?\s?(\d{4,6})/);
+  if (numMatch) {
+    const value = parseInt(numMatch[1], 10);
+    if (value <= 30000) return 'budget';    // ≤30k = budget (Indian market)
+    if (value <= 60000) return 'midrange';  // 30k–60k = mid-range
+    return 'premium';
+  }
+
   // "20k" shorthand
   const kMatch = q.match(/(\d{1,3})k\b/);
-  if (kMatch) return parseInt(kMatch[1], 10) * 1000;
+  if (kMatch) {
+    const value = parseInt(kMatch[1], 10) * 1000;
+    if (value <= 30000) return 'budget';
+    if (value <= 60000) return 'midrange';
+    return 'premium';
+  }
+
   if (/\bbudget\b|\bcheap\b|\baffordable\b/.test(q)) return 'budget';
   if (/\bpremium\b|\bflagship\b|\bhigh.end\b/.test(q)) return 'premium';
-  return null;
+  return 'general';
+}
+
+/**
+ * Apply unified output control after AI pipeline.
+ * Single source of truth for all domain overrides.
+ */
+function applyQueryIntelligence(strategy, type, segment, groqResult) {
+  const s = strategy || {};
+
+  // ── INFORMATIONAL: wipe all strategy fields ───────────────────────────
+  if (type === 'informational') {
+    s.recommendedAction = 'Provide a clear, factual answer based on user intent.';
+    s.positioning       = 'Informational query — no optimization strategy required.';
+    s.priceStrategy     = 'Not applicable.';
+    s.quickWin          = 'Focus on accuracy and clarity.';
+    s.focusKeywords     = [];
+    return s;
+  }
+
+  // ── PRODUCT: segment-aware overrides ─────────────────────────────────
+  if (type === 'product') {
+    // Remove game titles from rankings
+    const GAME_TITLES = /\b(pubg|free fire|fortnite|minecraft|valorant|cod|call of duty|bgmi)\b/i;
+    if (groqResult?.ranking?.some((r) => GAME_TITLES.test(r.name || ''))) {
+      groqResult.ranking = groqResult.ranking.filter((r) => !GAME_TITLES.test(r.name || ''));
+    }
+
+    // Fix broken price strings
+    if (s.priceStrategy) {
+      s.priceStrategy = s.priceStrategy
+        .replace(/\b10[–-]\s*(?!\d)/g, '10–20% ')
+        .replace(/\b\d+[–-]\s*$/, 'Price slightly above average and justify with strong features and reviews.')
+        .trim();
+    }
+
+    // Fix platform language leaking into product
+    if (s.recommendedAction?.toLowerCase().includes('onboarding flow')) {
+      s.recommendedAction = 'Differentiate with stronger specs and real-world performance in this price segment.';
+    }
+
+    if (segment === 'budget') {
+      s.positioning       = 'Budget-focused device optimized for value and performance.';
+      s.recommendedAction = 'Highlight price-to-performance advantage clearly.';
+      s.priceStrategy     = 'Stay within budget range and compete on performance-per-rupee, not premium branding.';
+      // Replace flagship competitors with budget-segment alternatives
+      const FLAGSHIP_RE = /\b(iphone|samsung galaxy s\d|oneplus \d{2}|pixel \d|galaxy z|galaxy ultra)\b/i;
+      if (groqResult?.competitors?.some((c) => FLAGSHIP_RE.test(c))) {
+        groqResult.competitors = ['Xiaomi Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
+      }
+    } else if (segment === 'midrange') {
+      s.positioning       = 'Balanced device offering performance, camera, and reliability.';
+      s.recommendedAction = 'Differentiate with camera quality and user experience.';
+    } else if (segment === 'premium') {
+      s.positioning       = 'Premium device with high-end performance and ecosystem integration.';
+      s.recommendedAction = 'Focus on brand, experience, and flagship features.';
+      s.priceStrategy     = 'Price at the premium tier — justify with superior specs, build quality, and 4.5★+ reviews.';
+    }
+  }
+
+  // ── PLATFORM: always override positioning and quickWin ────────────────
+  if (type === 'platform') {
+    s.positioning = 'Platform designed for fast discovery, filtering, and user experience.';
+    s.quickWin    = 'Reduce friction in onboarding and core action flow.';
+  }
+
+  return s;
 }
 
 export async function analyzeWithMultipleModels(query) {
   // ── Query intent routing — must run before cache check ───────────────────
-  const queryType = detectQueryType(query);
-  const budget    = extractBudget(query);
+  const queryType = classifyQuery(query);
+  const segment   = detectSegment(query);
 
   // Informational queries: return early — no AI model calls, no pricing, no competitors
   if (queryType === 'informational') {
@@ -2448,57 +2542,8 @@ export async function analyzeWithMultipleModels(query) {
     suggestions: m.suggestions.map(sanitizeOutput),
   });
 
-  // ── FINAL SANITY LAYER — runs after all pipeline stages ─────────────────
-  const strategy = finalStrategy || {};
-
-  if (queryType === 'product') {
-    // Remove game titles or irrelevant entities from rankings
-    const GAME_TITLES = /\b(pubg|free fire|fortnite|minecraft|valorant|cod|call of duty|bgmi)\b/i;
-    if (groqResult?.ranking?.some((r) => GAME_TITLES.test(r.name || ''))) {
-      groqResult.ranking = groqResult.ranking.filter((r) => !GAME_TITLES.test(r.name || ''));
-    }
-
-    // Fix broken price strings like "10–" with no trailing value
-    if (strategy.priceStrategy) {
-      strategy.priceStrategy = strategy.priceStrategy
-        .replace(/\b10[–-]\s*(?!\d)/g, '10–20% ')
-        .replace(/\b\d+[–-]\s*$/, 'Price slightly above average and justify with strong features and reviews.')
-        .trim();
-    }
-
-    // Fix wrong strategy language (platform words leaking into product)
-    if (strategy.recommendedAction?.toLowerCase().includes('onboarding flow')) {
-      strategy.recommendedAction = 'Differentiate with stronger specs and real-world performance in this price segment.';
-    }
-
-    // ── Budget-aware overrides ──────────────────────────────────────────
-    // Threshold ≤30000 covers the Indian budget/mid-budget segment (₹25k–₹30k is still budget)
-    const isBudgetQuery = (typeof budget === 'number' && budget <= 30000) || budget === 'budget';
-
-    if (isBudgetQuery) {
-      strategy.positioning = 'Budget-focused device optimized for performance, battery life, and value for money.';
-      strategy.priceStrategy = 'Stay within budget range and compete on performance-per-rupee, not premium branding.';
-      strategy.recommendedAction = 'Focus on price-to-performance advantage — highlight gaming, battery, and display within budget range.';
-
-      // Replace flagship competitors with realistic budget-segment alternatives
-      const FLAGSHIP_BRANDS = /\b(iphone|samsung galaxy s\d|oneplus \d{2}|pixel \d|galaxy z|galaxy ultra)\b/i;
-      if (groqResult?.competitors?.some((c) => FLAGSHIP_BRANDS.test(c))) {
-        groqResult.competitors = ['Xiaomi Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
-      }
-    }
-
-    // ── Premium-aware overrides ─────────────────────────────────────────
-    if (budget === 'premium') {
-      strategy.positioning = 'Premium device built for top-tier performance, build quality, and brand trust.';
-      strategy.priceStrategy = 'Price at the premium tier — justify with superior specs, build quality, and 4.5★+ reviews.';
-    }
-  }
-
-  // Platform override — always last, no conditions on content
-  if (queryType === 'platform') {
-    strategy.positioning = 'Job platform focused on fast job discovery, fresher-friendly filtering, and quick applications.';
-    strategy.quickWin    = 'Add fresher-only filter and enable 1-click apply.';
-  }
+  // ── FINAL SANITY LAYER — unified query intelligence ──────────────────────
+  const strategy = applyQueryIntelligence(finalStrategy || {}, queryType, segment, groqResult);
 
   const result = {
     groq:   repairModel(groqResult),
