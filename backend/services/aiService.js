@@ -39,14 +39,16 @@ function buildPromptGroq(query) {
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
     ? 'Focus on: user experience, job matching quality, application flow, feature depth, and platform trust signals. Do NOT mention physical attributes.'
-    : 'Focus on: features, build quality, performance, pricing, and user satisfaction signals.';
+    : 'Focus on: features, build quality, performance, pricing, and user satisfaction signals. Use CURRENT models only — no outdated products.';
 
-  return `You are an expert search ranking analyst.
+  return `You are an expert search ranking analyst with current market knowledge.
 Analyze the query: ${query}
 Return ONLY valid JSON. Do NOT include any explanation.
 
 STRICT RULES:
-- Use REAL ${entityLabel} names (e.g. Indeed, LinkedIn, Apple, Samsung — whatever is relevant)
+- Use REAL ${entityLabel} names (e.g. Indeed, LinkedIn, Apple, Samsung — whatever is relevant NOW)
+- Use CURRENT models and products — avoid outdated ones (Pixel 6a, Galaxy A54, iPhone 13, etc.)
+- NEVER say "as of my knowledge cutoff" or "I may be outdated" — assume current year context
 - NEVER use placeholders like "Product A", "Top Product", "Category Leader", "Competitor X"
 - NEVER include percentages, CTR numbers, CVR numbers, or keyword density figures
 - Use qualitative reasoning only: "strong engagement", "high relevance", "clear positioning"
@@ -55,13 +57,13 @@ STRICT RULES:
 JSON format:
 {
   "ranking": [
-    { "name": "real name here", "rank": 1 },
-    { "name": "real name here", "rank": 2 },
-    { "name": "real name here", "rank": 3 },
-    { "name": "real name here", "rank": 4 },
-    { "name": "real name here", "rank": 5 }
+    { "name": "real current name", "rank": 1 },
+    { "name": "real current name", "rank": 2 },
+    { "name": "real current name", "rank": 3 },
+    { "name": "real current name", "rank": 4 },
+    { "name": "real current name", "rank": 5 }
   ],
-  "competitors": ["real competitor names only"],
+  "competitors": ["real current competitor names only"],
   "insights": "qualitative explanation of why top results rank higher — no numbers, no percentages",
   "suggestions": [
     "specific actionable improvement referencing a real feature or competitor",
@@ -77,27 +79,29 @@ function buildPromptGPT(query) {
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
     ? 'Analyze: user acquisition, feature differentiation, onboarding quality, and platform positioning. Avoid physical product language.'
-    : 'Analyze: market positioning, feature differentiation, pricing strategy, and user satisfaction drivers.';
+    : 'Analyze: market positioning, feature differentiation, pricing strategy, and user satisfaction drivers. Reference current models only.';
 
-  return `You are a senior business intelligence analyst.
+  return `You are a senior business intelligence analyst with current market knowledge.
 Conduct a structured competitive analysis for: "${query}"
 Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
 
 STRICT RULES:
 - Use REAL ${entityLabel} names only — never "Product A", "Top Product", "Category Leader"
+- Use CURRENT products and brands — avoid outdated models (Pixel 6a, Galaxy A54, etc.)
+- NEVER say "as of my knowledge cutoff" or add disclaimers — assume current year context
 - NEVER output percentages, CTR values, CVR values, or keyword density numbers
 - Use qualitative language: "strong brand authority", "clear value proposition", "high user trust"
 - ${insightGuidance}
 
 {
   "ranking": [
-    { "name": "real name", "rank": 1 },
-    { "name": "real name", "rank": 2 },
-    { "name": "real name", "rank": 3 },
-    { "name": "real name", "rank": 4 },
-    { "name": "real name", "rank": 5 }
+    { "name": "real current name", "rank": 1 },
+    { "name": "real current name", "rank": 2 },
+    { "name": "real current name", "rank": 3 },
+    { "name": "real current name", "rank": 4 },
+    { "name": "real current name", "rank": 5 }
   ],
-  "competitors": ["real competitor or platform names"],
+  "competitors": ["real current competitor or platform names"],
   "insights": "qualitative breakdown of why top results win — positioning, trust, relevance, user experience",
   "suggestions": [
     "actionable improvement with a specific feature or competitor reference",
@@ -113,27 +117,29 @@ function buildPromptGemini(query) {
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
     ? 'Think about: ease of use, job discovery quality, application experience, and what makes users return. Avoid physical product language.'
-    : 'Think about: what makes users choose this, emotional and practical appeal, and what drives repeat purchases.';
+    : 'Think about: what makes users choose this today, emotional and practical appeal, and what drives repeat purchases. Use current models.';
 
-  return `You are a user-focused product and platform analyst.
+  return `You are a user-focused product and platform analyst with current market knowledge.
 A user is searching for: "${query}"
 Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
 
 STRICT RULES:
 - Use REAL ${entityLabel} names — never "Product A", "Top Product", "Category Leader", "Competitor X"
+- Use CURRENT products and services — avoid outdated models (Pixel 6a, Galaxy A54, iPhone 13, etc.)
+- NEVER say "as of my knowledge cutoff" or add disclaimers — assume current year context
 - NEVER include percentages, CTR, CVR, or any numeric performance claims
 - Use human, qualitative language: "easy to use", "trusted by users", "strong community"
 - ${insightGuidance}
 
 {
   "ranking": [
-    { "name": "real name", "rank": 1 },
-    { "name": "real name", "rank": 2 },
-    { "name": "real name", "rank": 3 },
-    { "name": "real name", "rank": 4 },
-    { "name": "real name", "rank": 5 }
+    { "name": "real current name", "rank": 1 },
+    { "name": "real current name", "rank": 2 },
+    { "name": "real current name", "rank": 3 },
+    { "name": "real current name", "rank": 4 },
+    { "name": "real current name", "rank": 5 }
   ],
-  "competitors": ["real competitor or platform names"],
+  "competitors": ["real current competitor or platform names"],
   "insights": "human-focused explanation of why users prefer these results — no numbers, no percentages",
   "suggestions": [
     "creative improvement referencing a real feature or user need",

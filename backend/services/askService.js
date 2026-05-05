@@ -3,6 +3,18 @@ import axios from 'axios';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL   = 'llama-3.1-8b-instant';
 
+// Injected into every system prompt — eliminates disclaimers and outdated hedging
+const NO_DISCLAIMER_RULES = `
+STRICT RULES — NO EXCEPTIONS:
+- NEVER say "as of my knowledge cutoff", "I may be outdated", "prices may vary", or "I cannot access real-time data"
+- NEVER mention past years unless the user explicitly asks about history
+- Always assume CURRENT YEAR context (2025–2026)
+- If exact latest data is unknown: give the MOST RELEVANT and REALISTIC current options based on market trends
+- Prefer newer models, recent series, and active brands
+- AVOID outdated models (Pixel 6a, Galaxy A54, iPhone 13, etc.)
+- Be confident and direct — no hedging, no filler
+`.trim();
+
 // ── Intent Detection ──────────────────────────────────────────────────────────
 
 export function detectIntent(query) {
@@ -35,29 +47,46 @@ export function detectIntent(query) {
 function buildPrompt(query, intent) {
   if (intent === 'informational' || intent === 'general') {
     return {
-      system: 'You are a highly accurate AI assistant. Answer queries using real-world, up-to-date knowledge. Be direct and factual. No marketing language. No templates. No generic filler.',
-      user:   `Query: ${query}`,
+      system: `You are an expert assistant with up-to-date knowledge of the world.
+Answer queries directly and factually. No marketing language. No templates. No generic filler.
+${NO_DISCLAIMER_RULES}`,
+      user: `Query: ${query}`,
     };
   }
 
   if (intent === 'recommendation') {
     return {
-      system: 'You are a product and service expert. Give real-world, current recommendations. List the best options available now. Avoid outdated products. Explain briefly why each is recommended. Keep it practical and realistic.',
-      user:   `Query: ${query}`,
+      system: `You are a product and market expert with current knowledge of available options.
+For product queries: return the top 5 current options with a short reason per item. No fake pricing if unsure.
+For service queries: return the top current platforms or services with brief reasoning.
+${NO_DISCLAIMER_RULES}
+
+FORMAT (for product/device queries):
+1. [Product Name] — [one-line reason]
+2. [Product Name] — [one-line reason]
+...
+
+Be specific. Use real current model names.`,
+      user: `Query: ${query}`,
     };
   }
 
   if (intent === 'strategy') {
     return {
-      system: 'You are an AEO/SEO expert. Provide actionable strategy to improve ranking and visibility. Give specific actions. No generic advice. Business-focused output only.',
-      user:   `Query: ${query}`,
+      system: `You are an AEO/SEO expert with current knowledge of search ranking factors.
+Provide actionable strategy to improve ranking and visibility.
+Give specific, concrete actions. No generic advice. Business-focused output only.
+${NO_DISCLAIMER_RULES}`,
+      user: `Query: ${query}`,
     };
   }
 
   // fallback
   return {
-    system: 'You are a helpful, accurate AI assistant. Answer the query directly and concisely.',
-    user:   `Query: ${query}`,
+    system: `You are a helpful, accurate AI assistant with current knowledge.
+Answer the query directly and concisely.
+${NO_DISCLAIMER_RULES}`,
+    user: `Query: ${query}`,
   };
 }
 
@@ -75,7 +104,7 @@ export async function askAI(query) {
         { role: 'system', content: system },
         { role: 'user',   content: user   },
       ],
-      temperature: 0.5,
+      temperature: 0.4,
       max_tokens:  1024,
     },
     {
