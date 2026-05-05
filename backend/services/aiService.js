@@ -2243,15 +2243,15 @@ function guardStrategy(candidates, primaryIntent) {
 function classifyQuery(query) {
   const q = query.toLowerCase();
 
-  // PLATFORM — job/career/hiring intent
+  // PLATFORM — job/career/hiring intent (checked first — highest priority)
   if (/\b(job|career|resume|hiring|internship|recruit)\b/.test(q))
     return 'platform';
 
-  // PRODUCT — device terms OR strong purchase/comparison intent
+  // PRODUCT — device terms trigger product classification directly
+  // No dependency on "best" or "top" — device word alone is sufficient
   if (
-    /\b(laptop|mobile|phone|smartphone|ac|tv|headphone|earbuds|tablet|watch|camera|ssd|gpu|ram|gaming)\b/.test(q) ||
-    /\b(buy|under|budget|price|specs|review|comparison)\b/.test(q) ||
-    (/\b(best|top)\b/.test(q) && /\b(laptop|mobile|phone|smartphone|headphone|earbuds|tablet|camera|gaming|device|gadget)\b/.test(q))
+    /\b(laptops?|mobiles?|phones?|smartphones?|ac|tv|headphones?|earbuds?|tablets?|watch|camera|ssd|gpu|ram|gaming)\b/.test(q) ||
+    /\b(buy|under|budget|price|specs|review|comparison)\b/.test(q)
   )
     return 'product';
 
@@ -2359,22 +2359,94 @@ function applyQueryIntelligence(strategy, type, segment, groqResult) {
  * Final output sanitizer — removes hallucinated entities, truncates long text,
  * and injects rule-based competitor sets per segment.
  */
-function cleanStrategy(strategy, queryType, segment) {
+// Outdated / irrelevant model names that should never appear in results
+const OUTDATED_MODELS = [
+  'galaxy s22', 'galaxy s21', 'galaxy s20',
+  'pixel 4a', 'pixel 4', 'pixel 3',
+  'iphone 14', 'iphone 13', 'iphone 12',
+  'oneplus 9', 'oneplus 8',
+  'redmi note 10', 'redmi note 9',
+];
+
+/**
+ * Filter out outdated or irrelevant product names from an array.
+ */
+function validateProducts(products, segment) {
+  if (!Array.isArray(products)) return products;
+  return products.filter(
+    (p) => !OUTDATED_MODELS.some((m) => p.toLowerCase().includes(m))
+  );
+}
+
+/**
+ * Hard sanitizer — removes banned words from strategy text fields.
+ */
+function cleanOutput(strategy) {
   if (!strategy) return strategy;
   const s = strategy;
 
+  const BANNED = [
+    'google pixel 4a', 'galaxy s22', 'iphone 14',
+    'galaxy s21', 'pixel 4', 'oneplus 9',
+  ];
+
+  for (const word of BANNED) {
+    if (s.recommendedAction?.toLowerCase().includes(word)) {
+      s.recommendedAction = 'Focus on performance, pricing, and user experience differentiation.';
+      break;
+    }
+  }
+
+  return s;
+}
+
+// Rule-based product sets: query keyword + segment → realistic current models
+const PRODUCT_OVERRIDES = [
+  {
+    match:    (q, seg) => /\b(mobile|phone|smartphone)\b/.test(q) && seg === 'budget',
+    rankings: ['iQOO Z6 Lite', 'Redmi Note 13', 'Realme Narzo 70'],
+  },
+  {
+    match:    (q, seg) => /\b(mobile|phone|smartphone)\b/.test(q) && seg === 'midrange',
+    rankings: ['Samsung Galaxy A55', 'OnePlus Nord CE 4', 'iQOO Neo 9'],
+  },
+  {
+    match:    (q, seg) => /\b(mobile|phone|smartphone)\b/.test(q) && seg === 'premium',
+    rankings: ['iPhone 15 Pro', 'Samsung Galaxy S24', 'Google Pixel 8 Pro'],
+  },
+  {
+    match:    (q, seg) => /\blaptop\b/.test(q) && seg === 'budget',
+    rankings: ['Acer Aspire Lite', 'HP 15s', 'Lenovo IdeaPad 1'],
+  },
+  {
+    match:    (q, seg) => /\blaptop\b/.test(q) && seg === 'midrange',
+    rankings: ['ASUS Vivobook 16', 'HP Pavilion 14', 'Lenovo IdeaPad Slim 5'],
+  },
+  {
+    match:    (q, seg) => /\blaptop\b/.test(q) && seg === 'premium',
+    rankings: ['MacBook Air M3', 'Dell XPS 15', 'ASUS ZenBook Pro'],
+  },
+];
+
+function cleanStrategy(strategy, queryType, segment, normalizedQuery) {
+  if (!strategy) return strategy;
+  const s = strategy;
+  const q = (normalizedQuery || '').toLowerCase();
+
   if (queryType === 'product') {
-    // ── Remove irrelevant / hallucinated product mentions ─────────────
+    // ── Hard sanitizer: remove banned / outdated model names ─────────
+    s = cleanOutput(s);
+
+    // ── Remove irrelevant / hallucinated phrases ──────────────────────
     const INVALID_PATTERNS = [
       /google pixel 4a/i,
       /random product/i,
       /irrelevant/i,
-      /saas/i,
+      /\bsaas\b/i,
       /onboarding flow/i,
       /user acquisition/i,
       /platform (positioning|strategy)/i,
     ];
-
     for (const pattern of INVALID_PATTERNS) {
       if (pattern.test(s.recommendedAction || '')) {
         s.recommendedAction = 'Focus on clear differentiation using performance, pricing, and user experience.';
@@ -2382,21 +2454,23 @@ function cleanStrategy(strategy, queryType, segment) {
       }
     }
 
-    // ── Truncate recommendedAction to 120 chars max ───────────────────
+    // ── Truncate recommendedAction to 120 chars ───────────────────────
     if (s.recommendedAction && s.recommendedAction.length > 120) {
       s.recommendedAction = s.recommendedAction.slice(0, 120).replace(/\s+\S*$/, '') + '.';
     }
 
-    // ── Rule-based competitor sets per segment ────────────────────────
-    if (segment === 'budget') {
-      s.topRankings = ['Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
-    } else if (segment === 'midrange') {
-      s.topRankings = ['Samsung Galaxy A series', 'OnePlus Nord series', 'iQOO Neo series'];
-    } else if (segment === 'premium') {
-      s.topRankings = ['iPhone Pro series', 'Samsung Galaxy S series', 'Google Pixel series'];
+    // ── Rule-based product overrides (query + segment) ────────────────
+    const override = PRODUCT_OVERRIDES.find((o) => o.match(q, segment));
+    if (override) {
+      s.topRankings = override.rankings;
+    } else {
+      // Generic segment fallback
+      if (segment === 'budget')   s.topRankings = ['Redmi Note series', 'Realme Narzo series', 'iQOO Z series'];
+      if (segment === 'midrange') s.topRankings = ['Samsung Galaxy A series', 'OnePlus Nord series', 'iQOO Neo series'];
+      if (segment === 'premium')  s.topRankings = ['iPhone Pro series', 'Samsung Galaxy S series', 'Google Pixel series'];
     }
 
-    // ── Remove SaaS / platform terms from product output ─────────────
+    // ── Remove SaaS / platform terms from product fields ─────────────
     const SAAS_TERMS = /\b(saas|onboarding|user acquisition|platform strategy|subscription tier)\b/i;
     if (SAAS_TERMS.test(s.positioning || '')) {
       s.positioning = 'Device optimized for performance, value, and user satisfaction.';
@@ -2601,6 +2675,7 @@ export async function analyzeWithMultipleModels(query) {
     applyQueryIntelligence(finalStrategy || {}, queryType, segment, groqResult),
     queryType,
     segment,
+    normalizedQuery,
   );
 
   const result = {
