@@ -1,8 +1,8 @@
 import axios from 'axios';
 
 const GROQ_API_URL  = 'https://api.groq.com/openai/v1/chat/completions';
-const PRIMARY_MODEL  = 'llama3-70b-8192';
-const FALLBACK_MODEL = 'llama3-8b-8192';
+const PRIMARY_MODEL  = 'llama-3.3-70b-versatile';
+const FALLBACK_MODEL = 'llama-3.1-8b-instant';
 
 // ── Groq call with automatic model fallback ───────────────────────────────────
 async function groqPost(messages, temperature, maxTokens) {
