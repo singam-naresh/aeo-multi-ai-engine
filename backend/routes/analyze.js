@@ -5,6 +5,24 @@ import { optionalAuth } from '../middleware/auth.js';
 
 const router = Router();
 
+// Safe fallback returned when the pipeline throws — keeps frontend stable
+const FALLBACK_RESPONSE = {
+  groq:   { ranking: [], competitors: [], insights: '', suggestions: [], visibilityScore: 70, improvementPotential: 'Medium' },
+  gpt:    { ranking: [], competitors: [], insights: '', suggestions: [], visibilityScore: 70, improvementPotential: 'Medium' },
+  gemini: { ranking: [], competitors: [], insights: '', suggestions: [], visibilityScore: 70, improvementPotential: 'Medium' },
+  comparison: { bestModel: 'groq', reason: 'Fallback mode — AI temporarily unavailable.' },
+  finalStrategy: {
+    recommendedAction: 'AI temporarily unavailable. Please try again in a moment.',
+    positioning:       'System fallback mode — no strategy generated.',
+    priceStrategy:     '',
+    quickWin:          '',
+    focusKeywords:     [],
+    confidence:        0.5,
+    evidence:          '',
+    groundSignals:     [],
+  },
+};
+
 // POST /api/analyze  (auth optional — works for guests too)
 router.post('/analyze', optionalAuth, async (req, res) => {
   const { query } = req.body;
@@ -31,8 +49,9 @@ router.post('/analyze', optionalAuth, async (req, res) => {
       logAnalytics(query.trim(), intent, bestModel, userId);
     });
   } catch (error) {
-    console.error('Analysis error:', error.message);
-    return res.status(500).json({ error: 'Failed to analyze query' });
+    // Return 200 with fallback so the frontend never crashes
+    console.error('Analyze failed:', error.message);
+    return res.status(200).json({ success: true, data: FALLBACK_RESPONSE });
   }
 });
 
