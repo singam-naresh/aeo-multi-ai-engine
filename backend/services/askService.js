@@ -135,13 +135,18 @@ function isFutureQuery(query) {
 export function detectIntent(query) {
   const q = query.toLowerCase().trim();
 
-  // PRODUCT_QUERY — physical devices and consumer goods
-  if (/\b(phones?|mobiles?|smartphones?|laptops?|notebooks?|tablets?|ipad|ac|air conditioner|tv|television|headphones?|earbuds?|earphones?|speakers?|smartwatches?|watches?|cameras?|gpu|cpu|processor|ssd|ram|router|printer|monitors?)\b/.test(q))
+  // PRODUCT_QUERY — physical devices, consumer goods, and anything "best X" or "top X"
+  if (/\b(phones?|mobiles?|smartphones?|laptops?|notebooks?|tablets?|ipad|ac|air.?conditioner|tv|television|headphones?|earbuds?|earphones?|speakers?|smartwatches?|watches?|cameras?|gpu|cpu|processor|ssd|ram|router|printer|monitors?|shoes?|sneakers?|boots?|bags?|backpack|clothing|shirt|jeans|dress|furniture|sofa|chair|mattress|refrigerator|fridge|washing.?machine|microwave|oven|vacuum|blender|mixer|cycle|bicycle|bike|scooter|car|vehicle|helmet|sunglasses|perfume|skincare|supplement|protein|earring|necklace|watch)\b/.test(q))
     return 'PRODUCT_QUERY';
 
-  // PLATFORM_QUERY — digital services, SaaS, job sites, tools
-  if (/\b(jobs?|careers?|resume|hiring|internship|platforms?|websites?|apps?|software|saas|tools?|services?|crm|dashboard|automation|chatbots?|ai tools?|generators?)\b/.test(q))
+  // PLATFORM_QUERY — digital services, SaaS, job sites, tools, apps
+  if (/\b(jobs?|careers?|resume|hiring|internship|platforms?|websites?|apps?|software|saas|tools?|services?|crm|dashboard|automation|chatbots?|ai.?tools?|generators?|streaming|netflix|spotify|youtube|instagram|twitter|reddit|discord|slack|notion|figma|canva|shopify|wordpress|wix|squarespace|hosting|vpn|antivirus|browser|editor|ide|framework|library)\b/.test(q))
     return 'PLATFORM_QUERY';
+
+  // PRODUCT_QUERY — catch "best X", "top X", "X under budget", "X for Y" patterns
+  // that don't match specific keywords above (e.g. "best restaurants", "best books")
+  if (/\b(best|top|cheapest|affordable|budget|premium|recommended|popular)\b/.test(q))
+    return 'PRODUCT_QUERY';
 
   // INFORMATIONAL_QUERY — facts, people, places, history, how-to
   if (
@@ -149,60 +154,35 @@ export function detectIntent(query) {
     q.startsWith('where') || q.startsWith('why') || q.startsWith('how') ||
     q.startsWith('is ') || q.startsWith('are ') || q.startsWith('does ') ||
     q.startsWith('did ') || q.startsWith('was ') || q.startsWith('were ') ||
-    /\b(history|explain|define|meaning|difference between|vs)\b/.test(q)
+    /\b(history|explain|define|meaning|difference between|vs|compare|versus)\b/.test(q)
   ) return 'INFORMATIONAL_QUERY';
 
-  // Default — treat as informational
-  return 'INFORMATIONAL_QUERY';
+  // Default — treat as product/recommendation query so it gets structured output
+  return 'PRODUCT_QUERY';
 }
 
 // ── Prompt Builders ───────────────────────────────────────────────────────────
 
 function buildPrompt(query, intent) {
-  // ── Shared structured output rules ───────────────────────────────────────
-  const STRUCTURED_FORMAT = `
-OUTPUT FORMAT — STRICT. Every line MUST start with one of these exact labels.
-NO unlabeled lines. NO free text. NO numbered lists. NO bullet points.
-
-INTRO: [one sentence, human tone — e.g. "If you're choosing a gaming laptop right now, these are the ones that actually matter:"]
-
-OPTION: [Full Product or Platform Name]
-CATEGORY: [one of: gaming / productivity / battery / camera / portability / value / balanced / developer / creative]
-WHY: [1–2 sentences — MUST include at least one specific detail: GPU model, CPU, battery hours, RAM, display spec, or measurable advantage. No vague words like "powerful", "great", "excellent" without proof.]
-PICK_IF: [one decision trigger — e.g. "you want max FPS without thermal throttling"]
-
-OPTION: [Full Product or Platform Name]
-CATEGORY: [category]
-WHY: [specific detail required]
-PICK_IF: [decision trigger]
-
-OPTION: [Full Product or Platform Name]
-CATEGORY: [category]
-WHY: [specific detail required]
-PICK_IF: [decision trigger]
-
-DECIDE: [scenario → product, one per line — e.g. "Gaming → Razer Blade 18"]
-[scenario → product]
-[scenario → product]
-
-RULES:
-- 3 options minimum, 5 maximum
-- EVERY option MUST have OPTION:, CATEGORY:, WHY:, PICK_IF: — all four, in order
-- DECIDE: block MUST have 3–5 lines, each as "scenario → product"
-- For generic queries (e.g. "best laptops"), use DIFFERENT categories per option — do NOT give 3 gaming laptops
-- No "Market Direction", no trend sentences, no filler, no disclaimers
-`.trim();
+  // ── Intent signals extracted from query for prompt injection ─────────────
+  const q = query.toLowerCase();
+  const intentHints = [
+    /gaming|fps|rtx|gpu|graphics/.test(q)          && 'Query signals GAMING intent — include gaming-focused options.',
+    /coding|programming|developer|dev\b/.test(q)   && 'Query signals DEVELOPER intent — include developer/productivity options.',
+    /camera|photo|photography|portrait/.test(q)    && 'Query signals CAMERA intent — include camera-focused options.',
+    /battery|endurance|all.?day/.test(q)           && 'Query signals BATTERY intent — include battery-focused options.',
+    /under|budget|cheap|affordable|value/.test(q)  && 'Query signals BUDGET intent — focus on value-for-money options.',
+    /\b(best|top)\s+\w+s?\s*(2025|2026)?\s*$/.test(q) && 'Query is GENERIC — return options with DIFFERENT categories.',
+  ].filter(Boolean).join('\n');
 
   // ── Future / uncertain timeframe queries ─────────────────────────────────
   if (intent === 'PRODUCT_QUERY' && isFutureQuery(query)) {
     return {
-      system: `You are a consumer technology analyst with current market knowledge.
-${BASE_RULES}
+      system: `${BASE_RULES}
 
-SPECIAL RULE — FUTURE QUERY:
-- Use SERIES language: "Samsung Galaxy S24 series", "latest iPhone Pro models", "latest Pixel flagship"
-- Do NOT invent specific future model names or specs
-- Recommend the CURRENT best options confidently — they are the right choice today
+DOMAIN: Consumer technology analyst.
+SPECIAL RULE — FUTURE QUERY: Use SERIES language ("Samsung Galaxy S24 series", "latest iPhone Pro models"). Do NOT invent future model names or specs. Recommend CURRENT best options confidently.
+${intentHints ? `\nINTENT SIGNALS:\n${intentHints}` : ''}
 
 ${STRUCTURED_FORMAT}`,
       user: `Query: ${query}`,
@@ -210,16 +190,38 @@ ${STRUCTURED_FORMAT}`,
   }
 
   if (intent === 'PRODUCT_QUERY') {
-    return {
-      system: `You are a consumer technology expert with current market knowledge.
-${BASE_RULES}
+    // Detect if this is a tech product or a general recommendation query
+    const isTechProduct = /laptop|phone|mobile|tablet|headphone|earbud|speaker|tv|monitor|gpu|cpu|camera|smartwatch|router|printer|ssd|ram/.test(q);
 
-ADDITIONAL RULES:
-- Use SERIES language, not outdated model numbers:
-  ✅ "Samsung Galaxy S24 series"  ✅ "latest iPhone Pro models"  ✅ "latest Pixel flagship"
+    if (isTechProduct) {
+      return {
+        system: `${BASE_RULES}
+
+DOMAIN: Consumer technology expert.
+SERIES LANGUAGE RULES:
+- Use "Samsung Galaxy S24 series" NOT "Samsung Galaxy S23"
+- Use "latest iPhone Pro models" NOT "iPhone 14"
+- Use "latest Pixel flagship" NOT "Pixel 7"
 - 3–5 CURRENT, REAL products only — no games, apps, or services
-- No fake pricing
 - WHY must include at least one specific spec or measurable detail
+${intentHints ? `\nINTENT SIGNALS:\n${intentHints}` : ''}
+
+${STRUCTURED_FORMAT}`,
+        user: `Query: ${query}`,
+      };
+    }
+
+    // General recommendation query (restaurants, books, shoes, movies, etc.)
+    return {
+      system: `${BASE_RULES}
+
+DOMAIN: Expert recommendation engine with broad knowledge.
+RULES:
+- Give REAL, SPECIFIC recommendations — actual names, not generic descriptions
+- Each option must be a real, well-known name (e.g. "Nike Air Max 270", "The Alchemist", "Zomato", "McDonald's")
+- WHY must include a specific reason why this option stands out
+- CATEGORY should reflect the type/use-case (e.g. value / premium / popular / trending / classic)
+${intentHints ? `\nINTENT SIGNALS:\n${intentHints}` : ''}
 
 ${STRUCTURED_FORMAT}`,
       user: `Query: ${query}`,
@@ -228,29 +230,31 @@ ${STRUCTURED_FORMAT}`,
 
   if (intent === 'PLATFORM_QUERY') {
     return {
-      system: `You are a digital platform and SaaS expert with current market knowledge.
-${BASE_RULES}
+      system: `${BASE_RULES}
 
-ADDITIONAL RULES:
+DOMAIN: Digital platform and SaaS expert.
+PLATFORM RULES:
 - Real, active platforms only (LinkedIn, Indeed, Notion, Slack, etc.)
 - No physical product language (no "battery", "display", "RAM")
 - WHY must include a specific feature, user count, or measurable advantage
-- Use CATEGORY values like: job search / productivity / collaboration / automation / AI / analytics
+- Valid CATEGORY values: job-search / productivity / collaboration / automation / AI / analytics / value
+${intentHints ? `\nINTENT SIGNALS:\n${intentHints}` : ''}
 
 ${STRUCTURED_FORMAT}`,
       user: `Query: ${query}`,
     };
   }
 
-  // INFORMATIONAL_QUERY — keep as direct prose, no structured format needed
+  // INFORMATIONAL_QUERY — direct prose answer
   return {
-    system: `You are an expert assistant with accurate, current knowledge.
-${BASE_RULES}
+    system: `${BASE_RULES}
 
+DOMAIN: Expert assistant with accurate, current knowledge.
 RULES:
 - Give a DIRECT, FACTUAL answer — 2–4 sentences max
 - No bullet points unless listing multiple distinct items
-- No business jargon, no strategy language, no pricing`,
+- No business jargon, no strategy language, no pricing
+- Plain prose only — the structured format does NOT apply here`,
     user: `Query: ${query}`,
   };
 }

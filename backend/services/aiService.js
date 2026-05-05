@@ -660,26 +660,10 @@ export async function analyzeProduct(query) {
       'You are a JSON-only response bot. You never explain. You only output raw valid JSON.',
       buildPromptGroq(query)
     );
-
     const parsed = parseAIResponse(content);
-
-    if (!parsed) {
-      console.warn('[groq] Empty response. Using FALLBACK_RESPONSE.');
-      return addEnhancements(FALLBACK_RESPONSE);
-    }
-
-    if (parsed._raw) {
-      console.warn('[groq] Using raw text result (JSON parse failed).');
-      return addEnhancements(buildResultFromRawText(parsed._raw));
-    }
-
+    if (!parsed) return addEnhancements(FALLBACK_RESPONSE);
+    if (parsed._raw) return addEnhancements(buildResultFromRawText(parsed._raw));
     const sanitized = sanitizeResult(parsed);
-    // If all ranking names were single-word brands, fall back to raw text extraction
-    if (sanitized.ranking === FALLBACK_RESPONSE.ranking) {
-      console.warn('[groq] All ranking names were discarded (single-word brands). Using raw text extraction.');
-      return addEnhancements(buildResultFromRawText(content));
-    }
-
     return addEnhancements(sanitized);
   } catch (error) {
     console.error('[groq] API error:', error.response?.data || error.message);
@@ -694,25 +678,10 @@ export async function analyzeProductGPT(query) {
       'You are a JSON-only structured data API. Return only raw valid JSON. Never include explanations or markdown.',
       buildPromptGPT(query)
     );
-
     const parsed = parseAIResponse(content);
-
-    if (!parsed) {
-      console.warn('[gpt] Empty response. Using FALLBACK_RESPONSE.');
-      return addEnhancements(FALLBACK_RESPONSE);
-    }
-
-    if (parsed._raw) {
-      console.warn('[gpt] Using raw text result (JSON parse failed).');
-      return addEnhancements(buildResultFromRawText(parsed._raw));
-    }
-
+    if (!parsed) return addEnhancements(FALLBACK_RESPONSE);
+    if (parsed._raw) return addEnhancements(buildResultFromRawText(parsed._raw));
     const sanitized = sanitizeResult(parsed);
-    if (sanitized.ranking === FALLBACK_RESPONSE.ranking) {
-      console.warn('[gpt] All ranking names were discarded (single-word brands). Using raw text extraction.');
-      return addEnhancements(buildResultFromRawText(content));
-    }
-
     return addEnhancements(sanitized);
   } catch (error) {
     console.error('[gpt] API error:', error.response?.data || error.message);
@@ -727,25 +696,10 @@ export async function analyzeProductGemini(query) {
       'You are a JSON-only creative analyst. Return only raw valid JSON. Never include explanations or markdown.',
       buildPromptGemini(query)
     );
-
     const parsed = parseAIResponse(content);
-
-    if (!parsed) {
-      console.warn('[gemini] Empty response. Using FALLBACK_RESPONSE.');
-      return addEnhancements(FALLBACK_RESPONSE);
-    }
-
-    if (parsed._raw) {
-      console.warn('[gemini] Using raw text result (JSON parse failed).');
-      return addEnhancements(buildResultFromRawText(parsed._raw));
-    }
-
+    if (!parsed) return addEnhancements(FALLBACK_RESPONSE);
+    if (parsed._raw) return addEnhancements(buildResultFromRawText(parsed._raw));
     const sanitized = sanitizeResult(parsed);
-    if (sanitized.ranking === FALLBACK_RESPONSE.ranking) {
-      console.warn('[gemini] All ranking names were discarded (single-word brands). Using raw text extraction.');
-      return addEnhancements(buildResultFromRawText(content));
-    }
-
     return addEnhancements(sanitized);
   } catch (error) {
     console.error('[gemini] API error:', error.response?.data || error.message);
@@ -3423,17 +3377,9 @@ export async function analyzeWithMultipleModels(query) {
     // ── Domain enforcement ────────────────────────────────────────────────
     const finalStrategy = enforceFinalStrategy(rawFinalStrategy, cleaningDomain, primaryIntent, normalizedQuery, topProduct);
 
-    // ── Step 6: Sanitize all model text fields ────────────────────────────
-    // removeTemplateLanguage runs first — strips "Top Picks:", "Here are the best",
-    // "As of my knowledge cutoff" etc. before sanitizeOutput sees the text.
-    // isRaw models bypass all sanitization — their text is real AI output and
-    // must not be mangled by cleaning layers.
+    // ── Step 6: Sanitize model text fields ───────────────────────────────
     const repairModel = (m) => {
       if (!m || typeof m !== 'object') return m;
-      if (m.isRaw) {
-        console.log('[repairModel] isRaw=true — skipping sanitization, preserving real AI text');
-        return m; // return untouched
-      }
       return {
         ...m,
         insights:    sanitizeOutput(removeTemplateLanguage(m.insights    || '')),
@@ -3466,187 +3412,25 @@ export async function analyzeWithMultipleModels(query) {
       finalStrategy: strategy,
     };
 
-    // ── Quality detection ─────────────────────────────────────────────────
-    // Detects valid JSON that contains only bare brand names or generic
-    // placeholder text — both are signs the model returned low-quality output.
+    // ── Final normalization: current models, consistent generations, no generic text ──
+    const normalizedResult = normalizeProductOutput(result, normalizedQuery);
 
-    // Bare brand-only names that indicate the FALLBACK_RESPONSE leaked through
-    // or the model returned only top-level brand names instead of real products.
-    const BARE_BRAND_RE = /^(apple|samsung|google|sony|dell|microsoft|lenovo|asus|hp|lg)$/i;
+    // ── Enrich + clean: remove template language, dedup brands ───────────
+    const enrichedResult = enrichAndCleanOutput(normalizedResult, query);
 
-    // Generic placeholder phrases that should never appear in real AI output
-    const GENERIC_PHRASES_RE = [
-      /leading platform in this category/i,
-      /established competitor with strong ux/i,
-      /fast.growing alternative/i,
-      /budget.focused option/i,
-      /niche specialist in this space/i,
-      /top competitor in this category/i,
-      /category leader/i,
-      /strong brand authority/i,
-      /user trust signals/i,
-      /established players in this space/i,
-      /emerging challengers/i,
-    ];
-
-    function isLowQualityOutput(modelResult) {
-      if (!modelResult || typeof modelResult !== 'object') return false;
-
-      // Check ranking names — if ALL are bare brand names, it's low quality
-      const ranking = modelResult.ranking || [];
-      if (ranking.length > 0) {
-        const allBareBrands = ranking.every((r) => BARE_BRAND_RE.test((r?.name || '').trim()));
-        if (allBareBrands) {
-          console.warn('[quality] All ranking names are bare brand names — low quality detected');
-          return true;
-        }
-      }
-
-      // Check insights + suggestions for generic placeholder phrases
-      const text = [
-        modelResult.insights || '',
-        ...(modelResult.suggestions || []),
-        ...(ranking.map((r) => r?.name || '')),
-        ...(modelResult.competitors || []),
-      ].join(' ');
-
-      const hasGeneric = GENERIC_PHRASES_RE.some((re) => re.test(text));
-      if (hasGeneric) {
-        console.warn('[quality] Generic placeholder phrases detected — low quality output');
-        return true;
-      }
-
-      return false;
-    }
-
-    // ── Raw bypass + low-quality bypass ──────────────────────────────────
-    // Skip all post-processing when:
-    //   a) model returned natural language text (isRaw), OR
-    //   b) model returned valid JSON but with generic/placeholder content
-    const hasRawModel     = groqResult?.isRaw || gptResult?.isRaw || geminiResult?.isRaw;
-    const hasLowQuality   = isLowQualityOutput(result.groq) ||
-                            isLowQualityOutput(result.gpt)  ||
-                            isLowQualityOutput(result.gemini);
-    const shouldBypass    = hasRawModel || hasLowQuality;
-
-    let processedResult;
-    if (shouldBypass) {
-      if (hasRawModel)   console.log('[pipeline] isRaw model detected — bypassing post-processing');
-      if (hasLowQuality) console.log('[pipeline] low-quality JSON detected — bypassing post-processing');
-
-      // Still enforce intent on strategy fields — those are safe to correct
-      result.finalStrategy = enforceIntentStrategy(query, result.finalStrategy);
-      console.log('FINAL QUICK WIN:', result.finalStrategy?.quickWin);
-      processedResult = result;
-    } else {
-      // ── Final normalization: current models, consistent generations, no generic text ──
-      const normalizedResult = normalizeProductOutput(result, normalizedQuery);
-
-      // ── Enrich + clean: remove template language, add reasoning, dedup brands ──
-      const enrichedResult = enrichAndCleanOutput(normalizedResult, query);
-
-      // ── Intent-aware correction: FINAL AUTHORITY — runs last, nothing overrides this ──
-      enrichedResult.finalStrategy = enforceIntentStrategy(query, enrichedResult.finalStrategy);
-      console.log('FINAL QUICK WIN:', enrichedResult.finalStrategy?.quickWin);
-      processedResult = enrichedResult;
-    }
+    // ── Intent-aware strategy correction: runs last, nothing overrides ────
+    enrichedResult.finalStrategy = enforceIntentStrategy(query, enrichedResult.finalStrategy);
+    console.log('FINAL QUICK WIN:', enrichedResult.finalStrategy?.quickWin);
 
     // Cache with TTL timestamp
-    // ── Final ranking override — guarantee real product names ─────────────
-    // If every ranking name is still a single word after all processing,
-    // replace rankings with hardcoded current products for the query type.
-    // Strategy fields (positioning, quickWin, priceStrategy) are never touched.
-
-    function isGarbageRanking(ranking) {
-      if (!Array.isArray(ranking) || ranking.length === 0) return true;
-      return ranking.every((item) => (item?.name || '').trim().split(/\s+/).length === 1);
-    }
-
-    function getRealProductsByQuery(q) {
-      const lq = q.toLowerCase();
-      if (/gaming\s+laptop|laptop.*gaming|gaming.*notebook/.test(lq))
-        return [
-          { name: 'ASUS ROG Zephyrus G14 (2025)', rank: 1 },
-          { name: 'Razer Blade 15',                rank: 2 },
-          { name: 'MSI Stealth 16 Studio',         rank: 3 },
-          { name: 'Lenovo Legion Pro 7i',           rank: 4 },
-          { name: 'Acer Predator Helios 18',        rank: 5 },
-        ];
-      if (/laptop|notebook|macbook|chromebook/.test(lq))
-        return [
-          { name: 'Dell XPS 15 (2025)',             rank: 1 },
-          { name: 'Apple MacBook Pro M3',           rank: 2 },
-          { name: 'ASUS ZenBook Pro 14',            rank: 3 },
-          { name: 'Lenovo ThinkPad X1 Carbon',      rank: 4 },
-          { name: 'HP Spectre x360 14',             rank: 5 },
-        ];
-      if (/mobile|phone|smartphone|iphone|android/.test(lq))
-        return [
-          { name: 'Samsung Galaxy S24 Ultra',       rank: 1 },
-          { name: 'Apple iPhone 15 Pro',            rank: 2 },
-          { name: 'Google Pixel 9 Pro',             rank: 3 },
-          { name: 'OnePlus 12',                     rank: 4 },
-          { name: 'Xiaomi 14 Ultra',                rank: 5 },
-        ];
-      if (/headphone|earbud|earphone|audio/.test(lq))
-        return [
-          { name: 'Sony WH-1000XM5',                rank: 1 },
-          { name: 'Apple AirPods Pro 2',            rank: 2 },
-          { name: 'Bose QuietComfort 45',           rank: 3 },
-          { name: 'Samsung Galaxy Buds3 Pro',       rank: 4 },
-          { name: 'Jabra Evolve2 85',               rank: 5 },
-        ];
-      if (/tablet|ipad/.test(lq))
-        return [
-          { name: 'Apple iPad Pro M4',              rank: 1 },
-          { name: 'Samsung Galaxy Tab S9 Ultra',    rank: 2 },
-          { name: 'Microsoft Surface Pro 10',       rank: 3 },
-          { name: 'Lenovo Tab P12 Pro',             rank: 4 },
-          { name: 'OnePlus Pad 2',                  rank: 5 },
-        ];
-      if (/job|career|resume|hiring|recruit/.test(lq))
-        return [
-          { name: 'LinkedIn Jobs',                  rank: 1 },
-          { name: 'Indeed',                         rank: 2 },
-          { name: 'Glassdoor',                      rank: 3 },
-          { name: 'Naukri',                         rank: 4 },
-          { name: 'Shine',                          rank: 5 },
-        ];
-      if (/\bai\b|chatbot|llm|generator|ai tool/.test(lq))
-        return [
-          { name: 'ChatGPT (OpenAI)',               rank: 1 },
-          { name: 'Claude (Anthropic)',             rank: 2 },
-          { name: 'Google Gemini',                  rank: 3 },
-          { name: 'Microsoft Copilot',              rank: 4 },
-          { name: 'Perplexity AI',                  rank: 5 },
-        ];
-      return null; // no override for unknown categories
-    }
-
-    const overrideRanking = getRealProductsByQuery(query);
-    if (overrideRanking) {
-      const models = ['groq', 'gpt', 'gemini'];
-      for (const key of models) {
-        if (isGarbageRanking(processedResult[key]?.ranking)) {
-          console.warn(`[override] 🚨 Garbage ranking detected in ${key} — injecting real products`);
-          processedResult[key] = {
-            ...(processedResult[key] || {}),
-            ranking: overrideRanking,
-          };
-        }
-      }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
     if (queryCache.size >= 100) {
       queryCache.delete(queryCache.keys().next().value);
     }
-    queryCache.set(cacheKey, { result: processedResult, timestamp: Date.now() });
+    queryCache.set(cacheKey, { result: enrichedResult, timestamp: Date.now() });
 
-    return processedResult;
+    return enrichedResult;
 
   } catch (err) {
-    // Top-level safety net — log the error, return a valid response shape
     console.error('analyzeWithMultipleModels failed:', err.message);
     return {
       groq:          {},

@@ -16,7 +16,15 @@ router.post('/ask', async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error('Ask error:', error.message);
-    return res.status(500).json({ error: 'Failed to process query' });
+    // Never return 500 — frontend shows "Analysis failed" for the whole page on 500
+    return res.status(200).json({
+      success: true,
+      data: {
+        answer: 'I was unable to process that query right now. Please try again in a moment.',
+        structured: null,
+        type: 'INFORMATIONAL_QUERY',
+      },
+    });
   }
 });
 
