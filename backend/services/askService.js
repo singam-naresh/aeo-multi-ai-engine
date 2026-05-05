@@ -3,89 +3,126 @@ import axios from 'axios';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL   = 'llama-3.1-8b-instant';
 
-// Injected into every system prompt — eliminates disclaimers and outdated hedging
-const NO_DISCLAIMER_RULES = `
-STRICT RULES — NO EXCEPTIONS:
+// ── Shared no-disclaimer preamble ─────────────────────────────────────────────
+const BASE_RULES = `
+ABSOLUTE RULES — NO EXCEPTIONS:
 - NEVER say "as of my knowledge cutoff", "I may be outdated", "prices may vary", or "I cannot access real-time data"
 - NEVER mention past years unless the user explicitly asks about history
-- Always assume CURRENT YEAR context (2025–2026)
-- If exact latest data is unknown: give the MOST RELEVANT and REALISTIC current options based on market trends
-- Prefer newer models, recent series, and active brands
-- AVOID outdated models (Pixel 6a, Galaxy A54, iPhone 13, etc.)
-- Be confident and direct — no hedging, no filler
+- Assume CURRENT YEAR context (2025–2026)
+- Use CURRENT products and brands — avoid outdated models (Pixel 6a, Galaxy A54, iPhone 13, Redmi Note 10, etc.)
+- Be confident and direct — no hedging, no filler, no disclaimers
 `.trim();
+
+// Generic phrases that degrade output quality — stripped before returning
+const GENERIC_PHRASES = [
+  /\bwell[- ]rounded option\b/gi,
+  /\bstrong performance\b/gi,
+  /\bgreat value for money\b/gi,
+  /\bsolid choice\b/gi,
+  /\bpopular choice\b/gi,
+  /\bexcellent option\b/gi,
+  /\bgood option\b/gi,
+  /\bworth considering\b/gi,
+  /\bknowledge cutoff\b/gi,
+  /\btraining data\b/gi,
+  /\bas of \d{4}\b/gi,
+  /\bI cannot (access|provide|guarantee)\b/gi,
+  /\bI (may|might) be (outdated|incorrect)\b/gi,
+];
+
+function stripGenericPhrases(text) {
+  let t = text;
+  for (const re of GENERIC_PHRASES) {
+    t = t.replace(re, '');
+  }
+  return t.replace(/\s{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 // ── Intent Detection ──────────────────────────────────────────────────────────
 
 export function detectIntent(query) {
   const q = query.toLowerCase().trim();
 
+  // PRODUCT_QUERY — physical devices and consumer goods
+  if (/\b(phones?|mobiles?|smartphones?|laptops?|notebooks?|tablets?|ipad|ac|air conditioner|tv|television|headphones?|earbuds?|earphones?|speakers?|smartwatches?|watches?|cameras?|gpu|cpu|processor|ssd|ram|router|printer|monitors?)\b/.test(q))
+    return 'PRODUCT_QUERY';
+
+  // PLATFORM_QUERY — digital services, SaaS, job sites, tools
+  if (/\b(jobs?|careers?|resume|hiring|internship|platforms?|websites?|apps?|software|saas|tools?|services?|crm|dashboard|automation|chatbots?|ai tools?|generators?)\b/.test(q))
+    return 'PLATFORM_QUERY';
+
+  // INFORMATIONAL_QUERY — facts, people, places, history, how-to
   if (
     q.startsWith('who') || q.startsWith('what') || q.startsWith('when') ||
-    q.startsWith('where') || q.startsWith('how') || q.startsWith('why') ||
+    q.startsWith('where') || q.startsWith('why') || q.startsWith('how') ||
     q.startsWith('is ') || q.startsWith('are ') || q.startsWith('does ') ||
-    q.startsWith('did ') || q.startsWith('was ') || q.startsWith('were ')
-  ) return 'informational';
+    q.startsWith('did ') || q.startsWith('was ') || q.startsWith('were ') ||
+    /\b(history|explain|define|meaning|difference between|vs)\b/.test(q)
+  ) return 'INFORMATIONAL_QUERY';
 
-  if (
-    q.includes('best') || q.includes('top') || q.includes('under') ||
-    q.includes(' vs ') || q.includes('compare') || q.includes('recommend') ||
-    q.includes('which') || q.includes('suggest')
-  ) return 'recommendation';
-
-  if (
-    q.includes('seo') || q.includes('ranking') || q.includes('optimize') ||
-    q.includes('strategy') || q.includes('aeo') || q.includes('visibility') ||
-    q.includes('keyword') || q.includes('traffic')
-  ) return 'strategy';
-
-  return 'general';
+  // Default — treat as informational
+  return 'INFORMATIONAL_QUERY';
 }
 
 // ── Prompt Builders ───────────────────────────────────────────────────────────
 
 function buildPrompt(query, intent) {
-  if (intent === 'informational' || intent === 'general') {
+  if (intent === 'PRODUCT_QUERY') {
     return {
-      system: `You are an expert assistant with up-to-date knowledge of the world.
-Answer queries directly and factually. No marketing language. No templates. No generic filler.
-${NO_DISCLAIMER_RULES}`,
+      system: `You are a product expert with current knowledge of the consumer electronics market.
+${BASE_RULES}
+
+ADDITIONAL RULES FOR PRODUCT QUERIES:
+- Give TOP 3–5 CURRENT and RELEVANT items only
+- Avoid outdated models (anything more than 2–3 years old)
+- Prefer the latest series and active product lines
+- Include a specific reason WHY each is recommended (performance, battery, camera, value, etc.)
+- NEVER mix categories (do not suggest games, apps, or services for hardware queries)
+- Do NOT include fake pricing — omit price if unsure
+
+OUTPUT FORMAT (use exactly this):
+Top Picks:
+1. [Product Name] — [specific reason]
+2. [Product Name] — [specific reason]
+3. [Product Name] — [specific reason]
+
+Summary: [1–2 lines on who should buy what]`,
       user: `Query: ${query}`,
     };
   }
 
-  if (intent === 'recommendation') {
+  if (intent === 'PLATFORM_QUERY') {
     return {
-      system: `You are a product and market expert with current knowledge of available options.
-For product queries: return the top 5 current options with a short reason per item. No fake pricing if unsure.
-For service queries: return the top current platforms or services with brief reasoning.
-${NO_DISCLAIMER_RULES}
+      system: `You are a digital platform and SaaS expert with current knowledge of the market.
+${BASE_RULES}
 
-FORMAT (for product/device queries):
-1. [Product Name] — [one-line reason]
-2. [Product Name] — [one-line reason]
-...
+ADDITIONAL RULES FOR PLATFORM QUERIES:
+- Compare real, active platforms only (LinkedIn, Indeed, Notion, etc.)
+- Give practical insights: UX quality, key features, trust signals, user base
+- No physical product language (no "battery", "display", "RAM")
+- Be specific about what makes each platform stand out
 
-Be specific. Use real current model names.`,
+OUTPUT FORMAT (use exactly this):
+Top Platforms:
+1. [Platform Name] — [specific reason: UX, features, trust, use-case]
+2. [Platform Name] — [specific reason]
+3. [Platform Name] — [specific reason]
+
+Best for: [1 line on which platform suits which user type]`,
       user: `Query: ${query}`,
     };
   }
 
-  if (intent === 'strategy') {
-    return {
-      system: `You are an AEO/SEO expert with current knowledge of search ranking factors.
-Provide actionable strategy to improve ranking and visibility.
-Give specific, concrete actions. No generic advice. Business-focused output only.
-${NO_DISCLAIMER_RULES}`,
-      user: `Query: ${query}`,
-    };
-  }
-
-  // fallback
+  // INFORMATIONAL_QUERY
   return {
-    system: `You are a helpful, accurate AI assistant with current knowledge.
-Answer the query directly and concisely.
-${NO_DISCLAIMER_RULES}`,
+    system: `You are an expert assistant with accurate, current knowledge.
+${BASE_RULES}
+
+ADDITIONAL RULES FOR INFORMATIONAL QUERIES:
+- Give a DIRECT, FACTUAL answer — no strategy language, no pricing, no positioning
+- Keep it to 2–4 lines unless the topic genuinely requires more
+- No bullet points unless listing multiple items
+- No business jargon`,
     user: `Query: ${query}`,
   };
 }
@@ -104,7 +141,7 @@ export async function askAI(query) {
         { role: 'system', content: system },
         { role: 'user',   content: user   },
       ],
-      temperature: 0.4,
+      temperature: 0.35,
       max_tokens:  1024,
     },
     {
@@ -115,7 +152,8 @@ export async function askAI(query) {
     },
   );
 
-  const answer = response.data.choices[0]?.message?.content?.trim() || '';
+  const raw    = response.data.choices[0]?.message?.content?.trim() || '';
+  const answer = stripGenericPhrases(raw);
 
   return { answer, type: intent };
 }
