@@ -40,46 +40,57 @@ async function groqPost(messages, temperature, maxTokens) {
 // It defines the AI's role, output contract, and quality constraints.
 
 const BASE_RULES = `
-SYSTEM ROLE: You are a product recommendation expert. Output structured, specific, decision-focused responses. No fluff. No generic phrases.
+SYSTEM ROLE: You are a product recommendation expert. Output structured, specific, decision-focused responses. No fluff. No generic phrases. Every word must help the user make a decision.
 
-MANDATORY OUTPUT RULES:
+MANDATORY FORMAT RULES:
 - EVERY line MUST start with one of these EXACT labels: INTRO: OPTION: CATEGORY: WHY: PICK_IF: DECIDE:
-- NEVER output unlabeled text or extra labels
-- Assume CURRENT YEAR context (2025–2026)
-- Return ONLY the final structured output
+- The label after WHY: is always PICK_IF: — NEVER _IF: NEVER IF: NEVER PICK:
+- NEVER output unlabeled text, extra labels, or blank lines between fields
+- Return ONLY the structured output — no preamble, no explanation
 
 PRODUCT NAME RULES (CRITICAL):
-- NEVER output a single brand name alone — ALWAYS Brand + Model
-- BAD: "Apple" "Samsung" "Google" "OnePlus"
-- GOOD: "Apple iPhone 15 Pro" "Samsung Galaxy S24 Ultra" "OnePlus 12R" "Google Pixel 9 Pro"
-- If unsure of exact model → use series name: "Samsung Galaxy S25 series" "latest iPhone 16 Pro"
+- ALWAYS output Brand + Model — minimum 2 words
+- BAD: "Apple" "Samsung" "Google" "OnePlus" "Vivo"
+- GOOD: "Apple iPhone 15 Pro" "Samsung Galaxy S24 Ultra" "Vivo iQOO 12 Pro" "OnePlus 12R"
+- If unsure of exact model → use: "Samsung Galaxy S25 series" "latest iPhone 16 Pro models"
 
-SPEC RULES — NO FAKE SPECS:
-- NEVER invent impossible specs (e.g. iPhone with M3 chip, 256GB RAM laptop, 5124mAh random battery)
-- Use realistic ranges when exact spec is uncertain: "~8–12 hour battery" "flagship-level processor"
-- GOOD specs to cite: RTX 4080, Snapdragon 8 Gen 3, 120Hz AMOLED, 50MP camera, 5000mAh, 16GB RAM
+SPEC RULES — NO FAKE OR VAGUE SPECS:
+- NEVER use: "flagship-level processor" "smooth performance" "high-quality images" "great camera"
+- ALWAYS name the actual chip, GPU, display, or battery: "Snapdragon 8 Gen 3" "RTX 4080" "120Hz AMOLED" "5000mAh" "50MP OIS"
+- If exact spec is unknown → use a realistic range: "~8–12h battery" "mid-range Dimensity chip"
+- NEVER invent impossible specs: no "M3 chip in Android", no "256GB RAM", no random mAh numbers
 
 QUALITY RULES — NO GENERIC LANGUAGE:
-- NEVER use: "strong performance", "great value", "enhance user experience", "build credibility", "alignment with search intent", "strong brand authority", "user trust signals"
-- ALWAYS replace with specific features or real differentiators
-- BAD: "great performance and user satisfaction"
-- GOOD: "Snapdragon 8 Gen 3 + 120Hz AMOLED delivers smooth gaming without frame drops"
+- BANNED phrases: "strong performance" "great value" "enhance user experience" "build credibility" "user trust signals" "strong brand authority" "alignment with search intent" "smooth and responsive" "high-quality" without proof
+- EVERY WHY must contain at least ONE of: chip name, GPU, display Hz, battery mAh, camera MP, storage, weight, or a real differentiating feature
+- GOOD: "Snapdragon 8 Gen 3 + 144Hz AMOLED + 5000mAh — handles 3-hour gaming sessions without throttling"
+- BAD: "powerful processor and great display for gaming"
 
-CATEGORY RULES:
-- Each OPTION must have a DIFFERENT, LOGICAL category
-- Valid: gaming / productivity / battery / camera / portability / value / developer / creative
-- Assign based on the product's actual strength, not randomly
+CATEGORY RULES — ASSIGN BY STRONGEST FEATURE:
+- gaming → only if it has high-refresh display + gaming chip + cooling
+- camera → only if it has the best camera system in the set
+- battery → only if it has the largest or most efficient battery
+- productivity → only if it has the best CPU/RAM for multitasking
+- portability → only if it is the lightest or most compact
+- value → only if it offers the best specs-per-price
+- Each option MUST have a DIFFERENT category — no two options share the same category
 
-PICK_IF RULES:
-- Must be a real, specific decision trigger
-- BAD: "if you want a good phone"
-- GOOD: "if you want smooth gaming without frame drops" "if battery life matters more than camera"
+COMPETITOR COMPARISON RULES:
+- At least ONE option's WHY must reference how it compares to another option or a known competitor
+- GOOD: "better low-light camera than the iQOO 12 Pro" "cheaper than the Galaxy S24 Ultra with similar display"
+- This gives the user real decision-making power
 
-SELF-VALIDATION (run before outputting):
-1. Any single-word product names? → Fix to Brand + Model
-2. Any fake or impossible specs? → Remove or correct
-3. Any generic phrases? → Rewrite with specific details
-4. Label is PICK_IF: not _IF: → Verify
+PICK_IF RULES — SPECIFIC DECISION TRIGGERS:
+- Must describe a real user situation, not a generic preference
+- BAD: "if you want a good phone" "if you need performance"
+- GOOD: "if you play BGMI or Call of Duty for 2+ hours daily" "if camera quality matters more than gaming performance"
+
+SELF-VALIDATION (mandatory before outputting):
+1. Every product name has Brand + Model? → If not, fix it
+2. Every WHY has a real spec (chip/GPU/display/battery/camera)? → If not, rewrite it
+3. Any generic phrases present? → Replace with specific details
+4. All categories are different and logically assigned? → If not, reassign
+5. Label after WHY is PICK_IF: (not _IF: not IF:)? → Verify every option
 `.trim();
 
 // ── Structured output format contract ────────────────────────────────────────
@@ -369,6 +380,103 @@ function parseStructuredResponse(text) {
   return { intro, options: validOptions, decideLines };
 }
 
+// ── Post-Parse Validation + Quality Layer ────────────────────────────────────
+// Runs after parsing. Enforces correctness, deduplicates tokens, scores quality.
+// Does NOT silently hide model mistakes — logs every correction made.
+
+// Phrases that indicate a vague WHY field — options with these get flagged
+const VAGUE_WHY_PATTERNS = [
+  /\bflagship.?level processor\b/i,
+  /\bsmooth (and responsive |)performance\b/i,
+  /\bhigh.quality images?\b/i,
+  /\bgreat (camera|display|performance|battery)\b/i,
+  /\bpowerful processor\b/i,
+  /\bexceptional (camera|performance|display)\b/i,
+  /\badvanced (camera|features|technology)\b/i,
+  /\bseamless (performance|experience)\b/i,
+  /\brobust (performance|build)\b/i,
+  /\bimpressive (specs|performance|camera)\b/i,
+];
+
+// Real spec signals — a WHY field must contain at least one of these
+const REAL_SPEC_RE = /\b(\d+\s*MP|\d+\s*Hz|\d+\s*GB|\d+\s*mAh|\d+\s*W|snapdragon|dimensity|helio|exynos|apple\s+[am]\d|rtx|gtx|radeon|intel\s+core|amd\s+ryzen|oled|amoled|lcd|ips|qhd|fhd|4k|uhd|~?\d+[\-–]\d+\s*h(our)?|ip6[78])/i;
+
+// Single-word brand names that should never appear as a full product name
+const BARE_BRAND_RE = /^(apple|samsung|google|oneplus|xiaomi|vivo|oppo|realme|poco|motorola|nokia|sony|lg|huawei|honor|asus|dell|hp|lenovo|acer|msi|razer|microsoft|nothing)$/i;
+
+// Remove duplicate tokens from a string (e.g. "2026 2026" → "2026")
+function dedupeTokens(text) {
+  if (!text) return text;
+  // Adjacent duplicates
+  let t = text.replace(/\b(\w+)\s+\1\b/gi, '$1');
+  // Collapse extra spaces
+  return t.replace(/\s{2,}/g, ' ').trim();
+}
+
+// Score a single option's quality (0–4). Options scoring < 2 are flagged.
+function scoreOption(opt) {
+  let score = 0;
+  // +1 if name has at least 2 words and is not a bare brand
+  if (opt.name && opt.name.trim().split(/\s+/).length >= 2 && !BARE_BRAND_RE.test(opt.name.trim())) score++;
+  // +1 if WHY contains a real spec signal
+  if (opt.why && REAL_SPEC_RE.test(opt.why)) score++;
+  // +1 if WHY has no vague patterns
+  if (opt.why && !VAGUE_WHY_PATTERNS.some((re) => re.test(opt.why))) score++;
+  // +1 if PICK_IF is specific (more than 4 words)
+  if (opt.pickIf && opt.pickIf.trim().split(/\s+/).length >= 4) score++;
+  return score;
+}
+
+// Validate and clean a parsed structured response
+function validateAndCleanStructured(parsed) {
+  if (!parsed) return parsed;
+
+  const cleaned = {
+    intro: dedupeTokens(parsed.intro || ''),
+    decideLines: (parsed.decideLines || []).map(dedupeTokens).filter(Boolean),
+    options: [],
+  };
+
+  const usedCategories = new Set();
+
+  for (const opt of (parsed.options || [])) {
+    const name     = dedupeTokens(opt.name    || '').trim();
+    const category = (opt.category || '').toLowerCase().trim();
+    const why      = dedupeTokens(opt.why     || '').trim();
+    const pickIf   = dedupeTokens(opt.pickIf  || '').trim();
+
+    // Skip options with bare brand names
+    if (BARE_BRAND_RE.test(name)) {
+      console.warn(`[validate] Skipping bare brand name: "${name}"`);
+      continue;
+    }
+
+    // Skip options with no real spec in WHY — log it
+    if (why && !REAL_SPEC_RE.test(why)) {
+      console.warn(`[validate] WHY field lacks real spec for "${name}": "${why.slice(0, 80)}"`);
+      // Keep it but mark as low-quality (don't silently drop — user still sees something)
+    }
+
+    // Deduplicate categories — if same category used twice, mark second as 'balanced'
+    let finalCategory = category;
+    if (usedCategories.has(category)) {
+      console.warn(`[validate] Duplicate category "${category}" for "${name}" — reassigning to "balanced"`);
+      finalCategory = 'balanced';
+    }
+    usedCategories.add(finalCategory);
+
+    const score = scoreOption({ name, why, pickIf });
+    console.log(`[quality] "${name}" score: ${score}/4`);
+
+    cleaned.options.push({ name, category: finalCategory, why, pickIf, _score: score });
+  }
+
+  // Sort by score descending so best options appear first
+  cleaned.options.sort((a, b) => (b._score || 0) - (a._score || 0));
+
+  return cleaned;
+}
+
 // ── Core Ask Function ─────────────────────────────────────────────────────────
 
 export async function askAI(query) {
@@ -384,10 +492,13 @@ export async function askAI(query) {
     1024,
   );
 
-  const answer     = stripGenericPhrases(raw);
-  const structured = (intent !== 'INFORMATIONAL_QUERY')
+  const answer = stripGenericPhrases(raw);
+  // Parse → validate → clean. validateAndCleanStructured logs every correction
+  // so model mistakes are visible in server logs, not silently hidden.
+  const rawStructured = (intent !== 'INFORMATIONAL_QUERY')
     ? parseStructuredResponse(answer)
     : null;
+  const structured = rawStructured ? validateAndCleanStructured(rawStructured) : null;
 
   return { answer, structured, type: intent };
 }
