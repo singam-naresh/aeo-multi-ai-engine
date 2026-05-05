@@ -1,4 +1,5 @@
-const API_BASE = 'http://localhost:5000';
+// Use the Render backend in production, localhost in local dev
+const API_BASE = import.meta.env.VITE_API_URL || 'https://aeo-multi-ai-engine.onrender.com';
 
 /**
  * Sends a query to the backend multi-model analysis endpoint.
