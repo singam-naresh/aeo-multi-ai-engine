@@ -4,29 +4,12 @@ const GROQ_API_URL   = 'https://api.groq.com/openai/v1/chat/completions';
 const PRIMARY_MODEL  = 'llama3-70b-8192';
 const FALLBACK_MODEL = 'llama3-8b-8192';
 
-// FALLBACK_RESPONSE — used ONLY when the API call AND both model retries fail.
-// Contains realistic product names so the UI never shows generic placeholder text.
-// This is a last-resort safety net, not a normal code path.
+// FALLBACK_RESPONSE — only used when API completely fails (network error, auth failure)
 const FALLBACK_RESPONSE = {
-  ranking: [
-    { name: 'Apple',         rank: 1 },
-    { name: 'Samsung',       rank: 2 },
-    { name: 'Google',        rank: 3 },
-    { name: 'Sony',          rank: 4 },
-    { name: 'Dell',          rank: 5 },
-  ],
-  competitors: [
-    'Apple',
-    'Samsung',
-    'Google',
-    'Sony',
-  ],
-  insights: 'Top results in this category win on brand trust, product quality, and strong alignment with user search intent.',
-  suggestions: [
-    'Highlight your strongest differentiator clearly in the opening section',
-    'Add a direct comparison against the top competitor in this category',
-    'Include real user use-case examples to build credibility and trust',
-  ],
+  ranking:     [],
+  competitors: [],
+  insights:    '',
+  suggestions: [],
 };
 
 // ─── Prompt Builders ────────────────────────────────────────────────────────
@@ -50,33 +33,62 @@ PRODUCT NAME RULES — MANDATORY:
 - A response with single-word brand names is INVALID — regenerate internally before outputting
 `.trim();
 
+// Generate query-relevant example names for the JSON format block
+// so the model sees examples that match the actual query domain
+function getExampleNames(query, domainType) {
+  const q = query.toLowerCase();
+  if (domainType === 'platform') {
+    if (/job|career|hire|recruit/.test(q))
+      return ['"LinkedIn Jobs"', '"Indeed"', '"Glassdoor"', '"Naukri"', '"Shine"'];
+    if (/ai|chatbot|llm|gpt|generator/.test(q))
+      return ['"ChatGPT (OpenAI)"', '"Claude (Anthropic)"', '"Google Gemini"', '"Microsoft Copilot"', '"Perplexity AI"'];
+    return ['"Notion"', '"Slack"', '"Asana"', '"Monday.com"', '"Trello"'];
+  }
+  // Product domain — match to query category
+  if (/vivo|oppo|realme|oneplus|xiaomi|redmi|poco/.test(q))
+    return ['"Vivo V30 Pro"', '"OPPO Reno 12 Pro"', '"Realme GT 6"', '"OnePlus Nord CE 4"', '"Xiaomi 14 Civi"'];
+  if (/samsung|galaxy/.test(q))
+    return ['"Samsung Galaxy S24 Ultra"', '"Samsung Galaxy A55"', '"Samsung Galaxy S24+"', '"Samsung Galaxy M55"', '"Samsung Galaxy F55"'];
+  if (/iphone|apple/.test(q))
+    return ['"Apple iPhone 15 Pro Max"', '"Apple iPhone 15 Pro"', '"Apple iPhone 15"', '"Apple iPhone 15 Plus"', '"Apple iPhone 14"'];
+  if (/pixel|google/.test(q))
+    return ['"Google Pixel 9 Pro"', '"Google Pixel 9"', '"Google Pixel 8a"', '"Google Pixel 9 Pro XL"', '"Google Pixel 8 Pro"'];
+  if (/phone|mobile|smartphone|android/.test(q))
+    return ['"Samsung Galaxy S24 Ultra"', '"Apple iPhone 15 Pro"', '"Google Pixel 9 Pro"', '"OnePlus 12"', '"Xiaomi 14 Ultra"'];
+  if (/gaming.*laptop|laptop.*gaming/.test(q))
+    return ['"ASUS ROG Zephyrus G14 (2025)"', '"Razer Blade 15"', '"MSI Stealth 16 Studio"', '"Lenovo Legion Pro 7i"', '"Acer Predator Helios 18"'];
+  if (/laptop|notebook|macbook/.test(q))
+    return ['"Dell XPS 15 (2025)"', '"Apple MacBook Pro M3"', '"ASUS ZenBook Pro 14"', '"Lenovo ThinkPad X1 Carbon"', '"HP Spectre x360 14"'];
+  if (/headphone|earbud|earphone/.test(q))
+    return ['"Sony WH-1000XM5"', '"Apple AirPods Pro 2"', '"Bose QuietComfort 45"', '"Samsung Galaxy Buds3 Pro"', '"Jabra Evolve2 85"'];
+  if (/tablet|ipad/.test(q))
+    return ['"Apple iPad Pro M4"', '"Samsung Galaxy Tab S9 Ultra"', '"Microsoft Surface Pro 10"', '"Lenovo Tab P12 Pro"', '"OnePlus Pad 2"'];
+  if (/tv|television/.test(q))
+    return ['"Samsung Neo QLED 8K"', '"LG OLED C3"', '"Sony Bravia XR A95L"', '"TCL QM8"', '"Hisense U8K"'];
+  if (/watch|smartwatch/.test(q))
+    return ['"Apple Watch Series 9"', '"Samsung Galaxy Watch 6"', '"Google Pixel Watch 2"', '"Garmin Fenix 7"', '"Fitbit Sense 2"'];
+  // Generic product fallback — use the query itself to shape examples
+  const noun = query.replace(/\b(best|top|good|cheap|affordable|premium|under|budget)\b/gi, '').trim().split(' ').slice(0, 2).join(' ');
+  return [`"Top ${noun} Option 1"`, `"Top ${noun} Option 2"`, `"Top ${noun} Option 3"`, `"Top ${noun} Option 4"`, `"Top ${noun} Option 5"`];
+}
+
 function buildPromptGroq(query) {
   const domainType = queryDomainHint(query);
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
-    ? 'Focus on: user experience, job matching quality, application flow, feature depth, and platform trust signals. Do NOT mention physical attributes.'
-    : 'Focus on: features, build quality, performance, pricing, and user satisfaction signals. Use CURRENT models only — no outdated products.';
+    ? 'Focus on: user experience, feature depth, and platform trust signals. Do NOT mention physical attributes.'
+    : `Focus on: features, performance, pricing, and user satisfaction for "${query}". Use CURRENT models only.`;
+  const exampleNames = getExampleNames(query, domainType);
 
-  const exampleNames = domainType === 'platform'
-    ? ['"Indeed"', '"LinkedIn Jobs"', '"Naukri"', '"Glassdoor"', '"Shine"']
-    : ['"Dell XPS 15 (2025)"', '"Apple MacBook Pro M3"', '"ASUS ROG Zephyrus G14"', '"Lenovo ThinkPad X1 Carbon"', '"HP Spectre x360 14"'];
+  return `You are an expert search ranking analyst. Analyze: "${query}"
+Return ONLY valid JSON. No explanation. No markdown.
 
-  return `You are an expert search ranking analyst with current market knowledge.
-Analyze the query: ${query}
-Return ONLY valid JSON. Do NOT include any explanation.
-
-${PRODUCT_NAME_RULES}
-
-STRICT RULES:
-- Use REAL ${entityLabel} names (e.g. Indeed, LinkedIn, Dell XPS 15, MacBook Pro M3 — whatever is relevant NOW)
-- Use CURRENT models and products — avoid outdated ones (Pixel 6a, Galaxy A54, iPhone 13, etc.)
-- NEVER say "as of my knowledge cutoff" or "I may be outdated" — assume current year context
-- NEVER use placeholders like "Product A", "Top Product", "Category Leader", "Competitor X"
-- NEVER include percentages, CTR numbers, CVR numbers, or keyword density figures
-- Use qualitative reasoning only: "strong engagement", "high relevance", "clear positioning"
+RULES:
+- Names MUST be specific: Brand + Model (e.g. "Vivo V30 Pro", NOT "Vivo")
+- Use products RELEVANT to the query — if query is about Vivo phones, rank Vivo phones
+- Use CURRENT 2024–2025 models only
 - ${insightGuidance}
 
-JSON format:
 {
   "ranking": [
     { "name": ${exampleNames[0]}, "rank": 1 },
@@ -85,40 +97,31 @@ JSON format:
     { "name": ${exampleNames[3]}, "rank": 4 },
     { "name": ${exampleNames[4]}, "rank": 5 }
   ],
-  "competitors": ["full product or platform names only — no single brand words"],
-  "insights": "qualitative explanation of why top results rank higher — no numbers, no percentages",
+  "competitors": ["specific competitor Brand + Model names"],
+  "insights": "why these rank higher — qualitative, no percentages",
   "suggestions": [
-    "specific actionable improvement referencing a real feature or competitor",
-    "specific positioning or content improvement",
-    "specific trust or credibility improvement"
+    "specific actionable improvement",
+    "positioning improvement",
+    "trust or credibility improvement"
   ]
-}
-Output VALID JSON only.`;
+}`;
 }
 
 function buildPromptGPT(query) {
   const domainType = queryDomainHint(query);
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
-    ? 'Analyze: user acquisition, feature differentiation, onboarding quality, and platform positioning. Avoid physical product language.'
-    : 'Analyze: market positioning, feature differentiation, pricing strategy, and user satisfaction drivers. Reference current models only.';
+    ? 'Analyze: feature differentiation, onboarding quality, and platform positioning.'
+    : `Analyze: market positioning, feature differentiation, and user satisfaction for "${query}". Current models only.`;
+  const exampleNames = getExampleNames(query, domainType);
 
-  const exampleNames = domainType === 'platform'
-    ? ['"LinkedIn Jobs"', '"Indeed"', '"Glassdoor"', '"Naukri"', '"Monster"']
-    : ['"Apple MacBook Pro M3"', '"Dell XPS 15 (2025)"', '"Lenovo ThinkPad X1 Carbon"', '"ASUS ZenBook Pro 14"', '"HP Spectre x360"'];
+  return `You are a business intelligence analyst. Analyze: "${query}"
+Return ONLY raw valid JSON. No markdown. No explanation.
 
-  return `You are a senior business intelligence analyst with current market knowledge.
-Conduct a structured competitive analysis for: "${query}"
-Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
-
-${PRODUCT_NAME_RULES}
-
-STRICT RULES:
-- Use REAL ${entityLabel} names only — never "Product A", "Top Product", "Category Leader"
-- Use CURRENT products and brands — avoid outdated models (Pixel 6a, Galaxy A54, etc.)
-- NEVER say "as of my knowledge cutoff" or add disclaimers — assume current year context
-- NEVER output percentages, CTR values, CVR values, or keyword density numbers
-- Use qualitative language: "strong brand authority", "clear value proposition", "high user trust"
+RULES:
+- Names MUST be specific: Brand + Model (e.g. "Samsung Galaxy S24 Ultra", NOT "Samsung")
+- Rank products RELEVANT to this exact query
+- Use CURRENT 2024–2025 models only
 - ${insightGuidance}
 
 {
@@ -129,40 +132,31 @@ STRICT RULES:
     { "name": ${exampleNames[3]}, "rank": 4 },
     { "name": ${exampleNames[4]}, "rank": 5 }
   ],
-  "competitors": ["full product or platform names — Brand + Model required"],
-  "insights": "qualitative breakdown of why top results win — positioning, trust, relevance, user experience",
+  "competitors": ["specific competitor Brand + Model names"],
+  "insights": "qualitative breakdown of why top results win",
   "suggestions": [
-    "actionable improvement with a specific feature or competitor reference",
+    "actionable improvement with specific reference",
     "positioning or differentiation strategy",
     "credibility or trust-building tactic"
   ]
-}
-Output VALID JSON only.`;
+}`;
 }
 
 function buildPromptGemini(query) {
   const domainType = queryDomainHint(query);
   const entityLabel = domainType === 'platform' ? 'platform or service' : 'product or brand';
   const insightGuidance = domainType === 'platform'
-    ? 'Think about: ease of use, job discovery quality, application experience, and what makes users return. Avoid physical product language.'
-    : 'Think about: what makes users choose this today, emotional and practical appeal, and what drives repeat purchases. Use current models.';
+    ? 'Think about: ease of use, discovery quality, and what makes users return.'
+    : `Think about: what makes users choose this for "${query}" today. Use current models.`;
+  const exampleNames = getExampleNames(query, domainType);
 
-  const exampleNames = domainType === 'platform'
-    ? ['"Indeed"', '"LinkedIn Jobs"', '"Glassdoor"', '"Naukri"', '"Shine"']
-    : ['"ASUS ROG Zephyrus G14"', '"Apple MacBook Air M3"', '"Lenovo IdeaPad Slim 5"', '"Dell Inspiron 15"', '"HP Pavilion 15"'];
+  return `You are a product analyst. A user searched: "${query}"
+Return ONLY raw valid JSON. No markdown. No explanation.
 
-  return `You are a user-focused product and platform analyst with current market knowledge.
-A user is searching for: "${query}"
-Return ONLY a raw valid JSON object. No markdown. No explanation. No code blocks.
-
-${PRODUCT_NAME_RULES}
-
-STRICT RULES:
-- Use REAL ${entityLabel} names — never "Product A", "Top Product", "Category Leader", "Competitor X"
-- Use CURRENT products and services — avoid outdated models (Pixel 6a, Galaxy A54, iPhone 13, etc.)
-- NEVER say "as of my knowledge cutoff" or add disclaimers — assume current year context
-- NEVER include percentages, CTR, CVR, or any numeric performance claims
-- Use human, qualitative language: "easy to use", "trusted by users", "strong community"
+RULES:
+- Names MUST be specific: Brand + Model (e.g. "OnePlus 12", NOT "OnePlus")
+- Rank products DIRECTLY relevant to this query
+- Use CURRENT 2024–2025 models only
 - ${insightGuidance}
 
 {
@@ -173,15 +167,14 @@ STRICT RULES:
     { "name": ${exampleNames[3]}, "rank": 4 },
     { "name": ${exampleNames[4]}, "rank": 5 }
   ],
-  "competitors": ["full product or platform names — Brand + Model required"],
-  "insights": "human-focused explanation of why users prefer these results — no numbers, no percentages",
+  "competitors": ["specific competitor Brand + Model names"],
+  "insights": "human-focused explanation of why users prefer these results",
   "suggestions": [
-    "creative improvement referencing a real feature or user need",
-    "user experience or onboarding improvement",
+    "creative improvement referencing a real feature",
+    "user experience improvement",
     "trust or community-building idea"
   ]
-}
-Output VALID JSON only.`;
+}`;
 }
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
@@ -264,7 +257,6 @@ function sanitizeName(name) {
 
 function sanitizeResult(parsed) {
   // Filter out single-word names (bare brand names like "Apple", "Samsung", "Google")
-  // These indicate the model ignored the product name rules — discard them.
   const SINGLE_WORD_RE = /^\s*\w+\s*$/;
 
   const ranking = Array.isArray(parsed.ranking)
@@ -280,19 +272,16 @@ function sanitizeResult(parsed) {
     : [];
 
   const competitors = Array.isArray(parsed.competitors)
-    ? parsed.competitors.filter((c) => {
-        if (!c) return false;
-        if (PLACEHOLDER_NAME_RE.test(c.trim())) return false;
-        // Allow single-word platform names (Indeed, LinkedIn, Notion) but flag for logging
-        return true;
-      })
+    ? parsed.competitors.filter((c) => c && !PLACEHOLDER_NAME_RE.test(c.trim()))
     : [];
 
+  // Never inject FALLBACK_RESPONSE — return empty arrays if AI gave nothing useful
+  // The frontend handles empty rankings gracefully
   return {
-    ranking:     ranking.length     ? ranking     : FALLBACK_RESPONSE.ranking,
-    competitors: competitors.length ? competitors : FALLBACK_RESPONSE.competitors,
-    insights:    typeof parsed.insights === 'string' ? parsed.insights  : FALLBACK_RESPONSE.insights,
-    suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : FALLBACK_RESPONSE.suggestions,
+    ranking,
+    competitors,
+    insights:    typeof parsed.insights === 'string' ? parsed.insights    : '',
+    suggestions: Array.isArray(parsed.suggestions)   ? parsed.suggestions : [],
   };
 }
 
