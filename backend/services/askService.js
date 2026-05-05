@@ -40,51 +40,78 @@ async function groqPost(messages, temperature, maxTokens) {
 // It defines the AI's role, output contract, and quality constraints.
 
 const BASE_RULES = `
-SYSTEM ROLE: You are a production-grade AI response engine. You must generate structured, deterministic output that is machine-parseable and user-useful. No conversational fluff. No deviations.
+SYSTEM ROLE: You are a product recommendation expert. Output structured, specific, decision-focused responses. No fluff. No generic phrases.
 
-CORE RULES (MANDATORY — NO EXCEPTIONS):
+MANDATORY OUTPUT RULES:
 - EVERY line MUST start with one of these EXACT labels: INTRO: OPTION: CATEGORY: WHY: PICK_IF: DECIDE:
-- NEVER output unlabeled text
-- NEVER change label names
-- NEVER add extra labels
-- NEVER include explanations outside the format
-- NEVER use filler phrases (e.g. "Here are", "Top picks", "As of now", "Let's explore", "Market Direction")
-- NEVER say "as of my knowledge cutoff", "I may be outdated", or "I cannot access real-time data"
-- NEVER mention past years unless the user explicitly asks about history
+- NEVER output unlabeled text or extra labels
 - Assume CURRENT YEAR context (2025–2026)
-- Use CURRENT products and brands — avoid outdated models
-- Output MUST be clean, concise, and structured
-- If output violates ANY rule → regenerate internally before responding
 - Return ONLY the final structured output
+
+PRODUCT NAME RULES (CRITICAL):
+- NEVER output a single brand name alone — ALWAYS Brand + Model
+- BAD: "Apple" "Samsung" "Google" "OnePlus"
+- GOOD: "Apple iPhone 15 Pro" "Samsung Galaxy S24 Ultra" "OnePlus 12R" "Google Pixel 9 Pro"
+- If unsure of exact model → use series name: "Samsung Galaxy S25 series" "latest iPhone 16 Pro"
+
+SPEC RULES — NO FAKE SPECS:
+- NEVER invent impossible specs (e.g. iPhone with M3 chip, 256GB RAM laptop, 5124mAh random battery)
+- Use realistic ranges when exact spec is uncertain: "~8–12 hour battery" "flagship-level processor"
+- GOOD specs to cite: RTX 4080, Snapdragon 8 Gen 3, 120Hz AMOLED, 50MP camera, 5000mAh, 16GB RAM
+
+QUALITY RULES — NO GENERIC LANGUAGE:
+- NEVER use: "strong performance", "great value", "enhance user experience", "build credibility", "alignment with search intent", "strong brand authority", "user trust signals"
+- ALWAYS replace with specific features or real differentiators
+- BAD: "great performance and user satisfaction"
+- GOOD: "Snapdragon 8 Gen 3 + 120Hz AMOLED delivers smooth gaming without frame drops"
+
+CATEGORY RULES:
+- Each OPTION must have a DIFFERENT, LOGICAL category
+- Valid: gaming / productivity / battery / camera / portability / value / developer / creative
+- Assign based on the product's actual strength, not randomly
+
+PICK_IF RULES:
+- Must be a real, specific decision trigger
+- BAD: "if you want a good phone"
+- GOOD: "if you want smooth gaming without frame drops" "if battery life matters more than camera"
+
+SELF-VALIDATION (run before outputting):
+1. Any single-word product names? → Fix to Brand + Model
+2. Any fake or impossible specs? → Remove or correct
+3. Any generic phrases? → Rewrite with specific details
+4. Label is PICK_IF: not _IF: → Verify
 `.trim();
 
 // ── Structured output format contract ────────────────────────────────────────
 // Shared across all product and platform prompt builders.
 const STRUCTURED_FORMAT = `
-OUTPUT STRUCTURE (follow exactly):
+OUTPUT FORMAT (follow exactly — no deviations):
 
-INTRO: [one sentence — state the decision context, no filler]
+INTRO: [1 sentence — what the user is choosing and why it matters]
 
-OPTION: [Full Product or Platform Name]
-CATEGORY: [ONE word only: gaming / productivity / battery / camera / portability / balanced / developer / creative / value / collaboration / automation]
-WHY: [MUST include at least ONE real spec or measurable detail — e.g. RTX 4090, M3 chip, 5000mAh, 120Hz, 32GB RAM, 4K OLED. No vague words like "powerful", "great", "excellent" without proof.]
-PICK_IF: [real user decision trigger — specific, not generic]
+OPTION: [Full Brand + Model Name — e.g. "Samsung Galaxy S24 Ultra" NOT "Samsung"]
+CATEGORY: [ONE word: gaming / productivity / battery / camera / portability / value / developer / creative]
+WHY: [1–2 sentences with at least ONE specific detail: chip name, GPU model, display spec, battery size, camera MP, or real feature. NO vague words without proof.]
+PICK_IF: [specific decision trigger — e.g. "you want the best low-light camera under ₹50k" NOT "you want a good phone"]
 
-[Repeat OPTION block 3–5 times. For GENERIC queries (e.g. "best laptops"), each OPTION MUST have a DIFFERENT CATEGORY — do NOT return 3 gaming options for a generic query.]
+[Repeat OPTION block 3–5 times — each with a DIFFERENT CATEGORY]
 
-DECIDE: [Scenario → Product, one per line, 3–5 lines]
-[Scenario → Product]
-[Scenario → Product]
+DECIDE: [use-case → Product Name, one per line, 3–5 lines]
+[use-case → Product Name]
+[use-case → Product Name]
 
-QUALITY CONSTRAINTS:
-- WHY must include at least ONE real spec (CPU, GPU, battery hours, RAM, display, etc.)
-- CATEGORY must be ONE word, consistent across all options
-- PICK_IF must be a real user decision trigger, not a generic phrase
-- DECIDE must map user intent → best option clearly
-- No duplicate options
-- No outdated models
-- No markdown, bullets, or symbols
-- No paragraphs outside the structure
+EXAMPLE (reference only — do not copy):
+INTRO: Choosing a gaming laptop in 2025 comes down to GPU power, thermal management, and display quality.
+OPTION: ASUS ROG Zephyrus G14 (2025)
+CATEGORY: gaming
+WHY: AMD Ryzen 9 + RTX 4070 GPU with 165Hz QHD display and ~10-hour battery — best thermal efficiency in its class.
+PICK_IF: you want high FPS gaming with a laptop light enough to carry daily.
+OPTION: Razer Blade 15
+CATEGORY: productivity
+WHY: Intel Core i9 + RTX 4080, 15.6-inch QHD 240Hz display, and premium aluminum build for creators and gamers.
+PICK_IF: you need a laptop that handles both 4K video editing and gaming without compromise.
+DECIDE: Best FPS performance → ASUS ROG Zephyrus G14 (2025)
+Best for creators who game → Razer Blade 15
 `.trim();
 
 // Generic phrases that degrade output quality — stripped before returning

@@ -24,13 +24,15 @@ function queryDomainHint(query) {
 
 // Shared product-name enforcement block injected into every prompt
 const PRODUCT_NAME_RULES = `
-PRODUCT NAME RULES — MANDATORY:
-- EVERY "name" field MUST contain Brand + Model (minimum 2 words)
-- NEVER output a single brand name alone
-- BAD (INVALID): "Apple", "Samsung", "Google", "Dell", "Sony"
-- GOOD (REQUIRED): "Apple MacBook Pro M3", "Samsung Galaxy S24 Ultra", "Google Pixel 9 Pro", "Dell XPS 15 (2025)", "Sony WH-1000XM5"
-- If you are unsure of the exact current model, use the most recent series name: "Apple MacBook Pro M4 series", "Samsung Galaxy S25 series"
-- A response with single-word brand names is INVALID — regenerate internally before outputting
+PRODUCT NAME RULES (MANDATORY):
+- EVERY "name" field MUST be Brand + Model — minimum 2 words
+- NEVER output a single brand name: BAD → "Apple" "Samsung" "Google"
+- GOOD → "Apple iPhone 15 Pro" "Samsung Galaxy S24 Ultra" "Google Pixel 9 Pro"
+- Use series name if unsure: "Samsung Galaxy S25 series" "latest iPhone 16 Pro models"
+- NEVER invent impossible specs (e.g. iPhone with M3 chip, 256GB RAM, random battery numbers)
+- Use realistic specs or omit: "flagship-level processor" "~5000mAh battery"
+- NEVER use generic phrases: "strong performance", "great value", "enhance user experience", "build credibility", "user trust signals"
+- Replace with specific features: "Snapdragon 8 Gen 3 + 120Hz AMOLED" "50MP camera with OIS"
 `.trim();
 
 // Generate query-relevant example names for the JSON format block
