@@ -2472,7 +2472,8 @@ export async function analyzeWithMultipleModels(query) {
     }
 
     // ── Budget-aware overrides ──────────────────────────────────────────
-    const isBudgetQuery = (typeof budget === 'number' && budget <= 25000) || budget === 'budget';
+    // Threshold ≤30000 covers the Indian budget/mid-budget segment (₹25k–₹30k is still budget)
+    const isBudgetQuery = (typeof budget === 'number' && budget <= 30000) || budget === 'budget';
 
     if (isBudgetQuery) {
       strategy.positioning = 'Budget-focused device optimized for performance, battery life, and value for money.';
