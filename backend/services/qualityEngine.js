@@ -119,12 +119,19 @@ export function dedupeTokens(text) {
   return text.replace(/\b(\w+)\s+\1\b/gi, '$1').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ── Option scoring 0–4 ────────────────────────────────────────────────────────
+// Score a single option 0–4
 export function scoreOption(opt) {
   let score = 0;
+  // +1 valid name (Brand + Model, not bare brand)
   if (opt.name && opt.name.trim().split(/\s+/).length >= 2 && !BARE_BRAND_RE.test(opt.name.trim())) score++;
+  // +1 WHY has real spec
   if (opt.why && REAL_SPEC_RE.test(opt.why)) score++;
-  if (opt.why && !VAGUE_WHY_PATTERNS.some((re) => re.test(opt.why))) score++;
+  // +1 WHY has no vague phrases — but only penalise if there's ALSO no real spec
+  // (avoids penalising "Snapdragon 8 Gen 3 delivers smooth gaming" which has a real spec)
+  const hasRealSpec = opt.why && REAL_SPEC_RE.test(opt.why);
+  const hasVague    = opt.why && VAGUE_WHY_PATTERNS.some((re) => re.test(opt.why));
+  if (!hasVague || hasRealSpec) score++; // pass if no vague OR if vague but spec present
+  // +1 PICK_IF is specific (more than 4 words)
   if (opt.pickIf && opt.pickIf.trim().split(/\s+/).length >= 4) score++;
   return score;
 }
@@ -303,10 +310,17 @@ DECIDE: [3 lines: use-case → product]`;
     const raw    = await groqPost([{ role: 'system', content: system }, { role: 'user', content: fallbackUser }], 0.15, 800);
     const parsed = parseStructuredResponse(stripGenericPhrases(raw));
     if (parsed && parsed.options && parsed.options.length >= 2) {
-      const { cleaned, rejected } = validateAndCleanStructured(parsed, constraint);
-      if (!rejected) {
-        console.log('[fallback] Dynamic fallback passed validation');
-        return cleaned;
+      // Fallback uses lighter validation — only check brand constraint and bare names
+      // Skip avg score threshold (fallback content is already seeded with real products)
+      const { cleaned } = validateAndCleanStructured(parsed, constraint);
+      if (cleaned && cleaned.options && cleaned.options.length >= 2) {
+        // Apply brand filter only — don't reject on score
+        const brandOk = !constraint || cleaned.options.every((o) => constraint.namePattern.test(o.name || ''));
+        const noBare  = cleaned.options.every((o) => !BARE_BRAND_RE.test(o.name.trim()));
+        if (brandOk && noBare) {
+          console.log('[fallback] Dynamic fallback accepted');
+          return cleaned;
+        }
       }
     }
   } catch (e) {
