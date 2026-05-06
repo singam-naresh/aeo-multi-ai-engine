@@ -392,6 +392,8 @@ export async function askAI(query) {
   const intent = detectIntent(query);
   const { system, user } = buildPrompt(query, intent);
 
+  console.log(`[ask] query="${query}" intent=${intent}`);
+
   // Detect brand constraint — if query mentions a specific brand, all options must match
   const constraint = detectBrandConstraint(query);
   if (constraint) console.log(`[brand] Constraint detected: "${constraint.brand}"`);
@@ -402,12 +404,15 @@ export async function askAI(query) {
   // ── Attempt 1: primary generation ────────────────────────────────────────
   const raw1    = await groqPost([{ role: 'system', content: system }, { role: 'user', content: user }], 0.35, 1024);
   const answer1 = stripGenericPhrases(raw1);
+  console.log(`[ask] attempt1 raw length=${raw1.length} parsed=${!!parseStructuredResponse(answer1)}`);
 
   if (intent !== 'INFORMATIONAL_QUERY') {
     const parsed1 = parseStructuredResponse(answer1);
     const result1 = parsed1
       ? validateAndCleanStructured(parsed1, constraint)
       : { cleaned: null, rejected: true, reasons: ['parse failed'], perOptionIssues: [] };
+
+    console.log(`[ask] attempt1 rejected=${result1.rejected} reasons=${(result1.reasons||[]).join('; ')}`);
 
     if (!result1.rejected) {
       structured = result1.cleaned;
@@ -441,6 +446,8 @@ Regenerate the complete response now.`;
       const result2 = parsed2
         ? validateAndCleanStructured(parsed2, constraint)
         : { cleaned: null, rejected: true, reasons: ['parse failed'], perOptionIssues: [] };
+
+      console.log(`[ask] attempt2 rejected=${result2.rejected} reasons=${(result2.reasons||[]).join('; ')}`);
 
       if (!result2.rejected) {
         structured = result2.cleaned;
