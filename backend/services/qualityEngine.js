@@ -238,9 +238,16 @@ export function validateAndCleanStructured(parsed, constraint = null) {
   // ── Brand constraint check ────────────────────────────────────────────────
   if (constraint) {
     const brandViolations = checkBrandConstraint(cleaned.options, constraint);
-    if (brandViolations.length > 0) {
+    // Reject only if more than half the options violate the brand constraint
+    // (allows 1 off-brand option in a 3-option response without full rejection)
+    const violationRatio = brandViolations.length / Math.max(cleaned.options.length, 1);
+    if (violationRatio > 0.5) {
       console.warn(`[brand] Constraint violation for "${constraint.brand}": ${brandViolations.join('; ')}`);
-      allReasons.push(...brandViolations);
+      allReasons.push(`brand constraint violated: ${brandViolations.length}/${cleaned.options.length} options are not ${constraint.brand} products`);
+    } else if (brandViolations.length > 0) {
+      // Soft violation — log but don't reject, filter out the offending options
+      console.warn(`[brand] Soft violation — filtering ${brandViolations.length} non-${constraint.brand} option(s)`);
+      cleaned.options = cleaned.options.filter((o) => constraint.namePattern.test(o.name || ''));
     }
   }
 
@@ -308,6 +315,22 @@ DECIDE: [3 lines: use-case → product]`;
 
   // Static safety net — only if AI fallback also fails
   console.log('[fallback] Using static safety net');
+
+  // If brand constraint is active, build a minimal brand-specific response
+  if (constraint) {
+    const seeds = constraint.seeds.split(',').map((s) => s.trim()).slice(0, 3);
+    return {
+      intro: `Top ${constraint.brand} options based on your query.`,
+      options: seeds.map((name, i) => ({
+        name,
+        category: ['camera', 'gaming', 'value', 'battery', 'portability'][i] || 'value',
+        why: `Current ${constraint.brand} model with strong specs and user ratings.`,
+        pickIf: `you want a reliable ${constraint.brand} device in this category.`,
+        _score: 2,
+      })),
+      decideLines: seeds.map((name) => `${constraint.brand} option → ${name}`),
+    };
+  }
   if (/laptop/.test(q)) return {
     intro: 'Top laptops available right now.',
     options: [

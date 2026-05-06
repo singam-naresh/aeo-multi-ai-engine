@@ -2363,10 +2363,11 @@ function classifyQuery(query) {
     return 'platform';
 
   // PRODUCT — device terms trigger product classification directly
-  // No dependency on "best" or "top" — device word alone is sufficient
   if (
     /\b(laptops?|mobiles?|phones?|smartphones?|ac|tv|headphones?|earbuds?|tablets?|watch|camera|ssd|gpu|ram|gaming)\b/.test(q) ||
-    /\b(buy|under|budget|price|specs|review|comparison)\b/.test(q)
+    /\b(buy|under|budget|price|specs|review|comparison)\b/.test(q) ||
+    // Brand names — any query mentioning a device brand is a product query
+    /\b(samsung|iphone|apple|vivo|oppo|realme|oneplus|xiaomi|redmi|poco|motorola|nokia|nothing|iqoo|google\s+pixel|pixel\s+phone|huawei|honor|sony\s+xperia|asus\s+rog|lenovo|dell|hp\s+laptop|macbook|razer|msi\s+laptop)\b/.test(q)
   )
     return 'product';
 
