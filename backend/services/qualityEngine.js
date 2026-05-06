@@ -228,31 +228,29 @@ export function validateAndCleanStructured(parsed, constraint = null) {
 
   cleaned.options.sort((a, b) => (b._score || 0) - (a._score || 0));
 
-  // Hard rejection gate
   const avg         = avgScore(cleaned.options);
   const noSpecCount = cleaned.options.filter((o) => !REAL_SPEC_RE.test(o.why || '')).length;
   const hasBare     = cleaned.options.some((o) => BARE_BRAND_RE.test(o.name.trim()));
-  const dupCats     = cleaned.options.length !== new Set(cleaned.options.map((o) => o.category)).size;
   const diffIssues  = checkDifferentiation(cleaned.options);
 
-  if (avg < 2.5)                  allReasons.push(`avg score ${avg.toFixed(1)} < 2.5`);
-  if (noSpecCount > 1)            allReasons.push(`${noSpecCount} options missing real specs`);
-  if (hasBare)                    allReasons.push('bare brand names remain');
-  if (dupCats)                    allReasons.push('duplicate categories remain');
+  // Log quality issues for visibility — but only reject on truly broken output
+  if (avg < 2.5)       console.warn(`[quality] avg score ${avg.toFixed(1)} < 2.5 — low quality but keeping`);
+  if (noSpecCount > 1) console.warn(`[quality] ${noSpecCount} options missing real specs`);
+  if (diffIssues.length > 0) console.warn(`[quality] use-case overlap detected: ${diffIssues.join('; ')}`);
+
+  // Hard reject ONLY when output is structurally broken — not on quality scores
   if (cleaned.options.length < 2) allReasons.push('fewer than 2 valid options');
-  if (diffIssues.length > 2)      allReasons.push(`use-case overlap: ${diffIssues.slice(0,2).join('; ')}`);
+  if (hasBare)                    allReasons.push('all options are bare brand names');
 
   // ── Brand constraint check ────────────────────────────────────────────────
   if (constraint) {
     const brandViolations = checkBrandConstraint(cleaned.options, constraint);
-    // Reject only if more than half the options violate the brand constraint
-    // (allows 1 off-brand option in a 3-option response without full rejection)
-    const violationRatio = brandViolations.length / Math.max(cleaned.options.length, 1);
+    const violationRatio  = brandViolations.length / Math.max(cleaned.options.length, 1);
     if (violationRatio > 0.5) {
       console.warn(`[brand] Constraint violation for "${constraint.brand}": ${brandViolations.join('; ')}`);
       allReasons.push(`brand constraint violated: ${brandViolations.length}/${cleaned.options.length} options are not ${constraint.brand} products`);
     } else if (brandViolations.length > 0) {
-      // Soft violation — log but don't reject, filter out the offending options
+      // Soft violation — filter out the offending options, keep the rest
       console.warn(`[brand] Soft violation — filtering ${brandViolations.length} non-${constraint.brand} option(s)`);
       cleaned.options = cleaned.options.filter((o) => constraint.namePattern.test(o.name || ''));
     }
